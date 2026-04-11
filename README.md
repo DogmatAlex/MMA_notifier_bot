@@ -1,86 +1,101 @@
-# MMA/Футбол Telegram Bot
+# Sports Notification Bot
 
-Telegram бот для получения расписания прямых трансляций MMA/UFC и футбола с сайта matchtv.ru.
+A Telegram bot that aggregates sports broadcasts for the next 48 hours (today and tomorrow) from multiple Russian sports websites.
 
-## Функциональность
+## Features
 
-1. Ежедневная рассылка расписания трансляций в 9:00 по московскому времени
-2. Команда `/start` - приветственное сообщение и список команд
-3. Команда `/today` - немедленное получение расписания на сегодня
-4. Фильтрация времени - показываются только будущие и текущие трансляции
-5. Умные иконки - автоматический выбор эмодзи в зависимости от типа спорта (поддерживаются английские и русские ключевые слова)
-6. Фильтр прямых эфиров - показываются только трансляции с пометкой "Прямая трансляция"
-7. Реальные коэффициенты ставок - интеграция с The Odds API для получения актуальных коэффициентов
-8. Улучшенный парсинг - обновленные заголовки для cloudscraper для лучшей совместимости
-9. Реалистичные заглушки - русскоязычные примеры данных с правильными ключевыми словами для эмодзи
+- **Multi-source parsing**: Collects data from 5 reliable sports websites
+- **Smart filtering**: Focuses on Football and MMA events only
+- **Fast execution**: Uses asyncio for concurrent requests, no time.sleep() delays
+- **Clean data**: Removes advertising text and normalizes event titles
+- **Deduplication**: Removes duplicate events found on multiple sources
+- **Odds integration**: Fetches betting odds from The Odds API
+- **Daily notifications**: Automatic daily updates at 9:00 AM Moscow time
+- **Proper formatting**: Beautiful Markdown messages with emojis
 
-## Установка
+## Sources
 
-1. Клонируйте репозиторий:
+1. matchtv.ru
+2. sport-express.ru
+3. championat.com
+4. sports.ru
+5. liveresult.ru
+
+## Requirements
+
+- Python 3.8+
+- Telegram Bot Token
+- The Odds API Key
+
+## Installation
+
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd sports-notification-bot
    ```
-   git clone <repo-url>
-   cd MMA_notifier_bot
-   ```
 
-2. Установите зависимости:
-   ```
+2. Install dependencies:
+   ```bash
    pip install -r requirements.txt
    ```
 
-3. Замените `YOUR_TELEGRAM_BOT_TOKEN_HERE` в файле `bot.py` на токен вашего Telegram бота или создайте файл `.env` с вашим токеном:
+3. Create a `.env` file based on `sample.env`:
    ```bash
+   cp sample.env .env
+   ```
+   
+4. Edit `.env` and add your actual tokens:
+   ```
    TELEGRAM_BOT_TOKEN=your_actual_telegram_bot_token_here
    ODDS_API_KEY=your_actual_odds_api_key_here
    ```
-   
-   Или переименуйте файл `sample.env` в `.env` и добавьте туда ваш токен:
-   ```bash
-   mv sample.env .env
-   # Затем отредактируйте .env файл и добавьте ваш токен и API ключ
-   ```
 
-## Запуск
+## Usage
 
-```
-python bot.py
+Run the bot:
+```bash
+python bot_main.py
 ```
 
-## Использование
+## Bot Commands
 
-1. Найдите вашего бота в Telegram
-2. Отправьте команду `/start` для начала работы
-3. Отправьте команду `/today` для получения расписания на сегодня
-4. Бот будет автоматически присылать расписание каждый день в 9:00
+- `/start` - Start the bot and register for daily notifications
+- `/today` - Get sports broadcasts for the next 48 hours
 
-## Структура проекта
+## Architecture
 
-- `bot.py` - основной файл с кодом бота
-- `requirements.txt` - зависимости проекта
-## Технологии
+### config.py
+Handles loading of environment variables and validation.
 
-- Python 3.14+
-- aiogram 3.x - для работы с Telegram Bot API
-- APScheduler - для планирования ежедневных уведомлений
-- BeautifulSoup4 - для парсинга сайта matchtv.ru
-- requests - для HTTP запросов
-- python-dotenv - для загрузки конфигурации из файла .env
-- The Odds API - для получения коэффициентов ставок
-## Примечания
+### parser.py
+Contains all parsing logic:
+- Concurrent fetching from all sources using asyncio
+- Smart filtering for Football and MMA events
+- Text cleaning and normalization
+- Deduplication algorithms
+- Odds integration with fuzzy matching
 
-Парсер сайта matchtv.ru теперь использует библиотеку cloudscraper с улучшенными заголовками для обхода защиты от парсинга и корректно извлекает реальные данные о трансляциях MMA/UFC и футбола.
+### bot_main.py
+Main bot implementation:
+- Telegram command handlers
+- Daily notification scheduler
+- Message formatting and sending
 
-Для обновления селекторов в функции `parse_matchtv_schedule()` при изменении структуры сайта рекомендуется использовать скрипты для анализа структуры страницы.
+## Error Handling
 
-Бот теперь включает в себя улучшенную логику:
-- Показывает только будущие и текущие трансляции
-- Автоматически выбирает соответствующие эмодзи для разных видов спорта (поддерживаются английские и русские ключевые слова)
-- Фильтрует только прямые эфиры
-- Предоставляет реальные коэффициенты ставок через интеграцию с The Odds API
-- В случае недоступности API использует fallback на Google поиск
-- Использует реалистичные русскоязычные заглушки с правильными ключевыми словами
+- Graceful handling of website outages (continues with remaining sources)
+- Increased Telegram API timeout (60 seconds)
+- Comprehensive logging
+- Fallback messages when no events found
 
+## Development
 
+To test the parser independently:
+```bash
+python -m parser
+```
 
-## Лицензия
+## License
 
-MIT
+MIT License

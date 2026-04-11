@@ -1,4 +1,0 @@
-=== DEBUG SNAPSHOT OF ALL PARSED BROADCASTS ===
-Total broadcasts before deduplication: 1
-
-1. Time: 01:40, Sport: Football, Event: self.__next_f.push([1,"1b:[\"$\",\"$L53\",null,{\"channel\":\"$undefined\",\"channels\":[{\"id\":10,

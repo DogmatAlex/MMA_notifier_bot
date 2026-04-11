@@ -1,11 +1,14 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Загружаем данные из .env
 load_dotenv()
 
-# Get the Telegram bot token from environment variables
-TELEGRAM_BOT_TOKEN = os.getenv('BOT_TOKEN')
-
-# Get the Odds API key from environment variables
+TELEGRAM_BOT = os.getenv('TELEGRAM_BOT')
 ODDS_API_KEY = os.getenv('ODDS_API_KEY')
+
+if not TELEGRAM_BOT:
+    raise ValueError("ОШИБКА: Переменная TELEGRAM_BOT не найдена в .env файле!")
+
+if not ODDS_API_KEY:
+    raise ValueError("ОШИБКА: Переменная ODDS_API_KEY не найдена в .env файле!")
