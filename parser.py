@@ -28,7 +28,9 @@ MMA_KEYWORDS = [
 STOP_WORDS = [
     'плавание', 'баскетбол', 'волейбол', 'хоккей', 'теннис', 'биатлон',
     'лыжи', 'боулинг', 'кубок мира', 'гарри поттер', 'обзор', 'новости',
-    'интервью', 'итоги', 'репортаж', 'дневник', 'фильм', 'синхронное плавание'
+    'интервью', 'итоги', 'репортаж', 'дневник', 'фильм', 'синхронное плавание',
+    'после футбола', 'черданцев', 'георгий', 'обзор тура', 'главные новости',
+    'лучшие моменты', 'топ-10', 'кровь на лице', 'фото', 'видео голов'
 ]
 
 # Trash keywords to remove (soft cleaning)
@@ -759,7 +761,20 @@ async def parse_fight_source(date_str=None):
         
         if response.status_code != 200:
             logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
-            return []
+            # Try the translations URL as an alternative
+            try:
+                translations_url = "https://fight.ru/translations/" if not date_str else f"https://fight.ru/translations/?date={date_str}"
+                logger.info(f"Trying to fetch translations URL {translations_url}")
+                translations_response = scraper.get(translations_url, headers=headers, timeout=15)
+                if translations_response.status_code == 200:
+                    response = translations_response
+                    logger.info(f"Successfully fetched translations URL")
+                else:
+                    logger.warning(f"Failed to fetch translations URL, status code: {translations_response.status_code}")
+                    return []
+            except Exception as e:
+                logger.warning(f"Error fetching translations URL: {e}")
+                return []
             
         soup = BeautifulSoup(response.text, 'html.parser')
         broadcasts = []
@@ -1001,6 +1016,10 @@ async def parse_championat_source(date_str=None):
                             if time_match:
                                 time_str = time_match.group(1)
                             
+                            # Skip events with N/A time when parsing main pages
+                            if time_str == "N/A":
+                                continue
+                            
                             # Check if it contains sports keywords
                             lower_text = elem_text.lower()
                             sports_keywords = ["футбол", "mma", "ufc", "бой", "юфс", "бокс"]
@@ -1182,6 +1201,10 @@ async def parse_sport_express_source(date_str=None):
                             if time_match:
                                 time_str = time_match.group(1)
                             
+                            # Skip events with N/A time when parsing main pages
+                            if time_str == "N/A":
+                                continue
+                            
                             # Check if it contains sports keywords
                             lower_text = elem_text.lower()
                             sports_keywords = ["футбол", "mma", "ufc", "бой", "юфс", "бокс"]
@@ -1296,21 +1319,74 @@ def deduplicate_broadcasts(broadcasts):
     if not broadcasts:
         return []
     
-    # Group broadcasts by time (same minute) and keep the longest text
-    time_groups = {}
-    for broadcast in broadcasts:
-        # Create a key based on time (hour:minute)
-        time_key = broadcast['time']
-        
-        # If we already have broadcasts with this time, keep the one with the longest event text
-        if time_key in time_groups:
-            if len(broadcast['event']) > len(time_groups[time_key]['event']):
-                time_groups[time_key] = broadcast
-        else:
-            time_groups[time_key] = broadcast
+    # Use fuzzy matching to identify similar events
+    unique_broadcasts = []
+    processed_indices = set()
     
-    # Convert time_groups back to a list
-    unique_broadcasts = list(time_groups.values())
+    for i, broadcast in enumerate(broadcasts):
+        if i in processed_indices:
+            continue
+            
+        # Check for similar broadcasts
+        similar_broadcasts = [broadcast]
+        
+        for j in range(i + 1, len(broadcasts)):
+            if j in processed_indices:
+                continue
+                
+            other_broadcast = broadcasts[j]
+            
+            # Check if times are close (less than 45 minutes apart)
+            try:
+                time1_parts = broadcast['time'].split(':')
+                time2_parts = other_broadcast['time'].split(':')
+                
+                if len(time1_parts) == 2 and len(time2_parts) == 2:
+                    hour1, minute1 = int(time1_parts[0]), int(time1_parts[1])
+                    hour2, minute2 = int(time2_parts[0]), int(time2_parts[1])
+                    
+                    # Convert to minutes for comparison
+                    total_minutes1 = hour1 * 60 + minute1
+                    total_minutes2 = hour2 * 60 + minute2
+                    
+                    # Handle day boundary (if needed)
+                    if abs(total_minutes1 - total_minutes2) > 45:
+                        # Check if it's a day boundary case (e.g., 23:50 and 00:10)
+                        if total_minutes1 > 23 * 60 and total_minutes2 < 1 * 60:
+                            # Adjust for day boundary
+                            total_minutes2 += 24 * 60
+                        elif total_minutes2 > 23 * 60 and total_minutes1 < 1 * 60:
+                            # Adjust for day boundary
+                            total_minutes1 += 24 * 60
+                            
+                    time_diff = abs(total_minutes1 - total_minutes2)
+                    
+                    # Check if events are similar (fuzzy ratio > 60%) and time difference < 45 minutes
+                    if time_diff < 45:
+                        similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
+                        if similarity > 60:
+                            similar_broadcasts.append(other_broadcast)
+                            processed_indices.add(j)
+            except Exception:
+                # If time parsing fails, skip time comparison but still check similarity
+                similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
+                if similarity > 60:
+                    similar_broadcasts.append(other_broadcast)
+                    processed_indices.add(j)
+        
+        # From similar broadcasts, keep the best one
+        # Preference: contains "Прямая" or longer text
+        best_broadcast = similar_broadcasts[0]
+        for similar in similar_broadcasts:
+            # If current best doesn't have "Прямая" but this one does, choose this one
+            if "Прямая" not in best_broadcast['event'] and "Прямая" in similar['event']:
+                best_broadcast = similar
+            # If both have "Прямая" or both don't, choose the longer one
+            elif len(similar['event']) > len(best_broadcast['event']):
+                best_broadcast = similar
+                
+        unique_broadcasts.append(best_broadcast)
+        processed_indices.add(i)
     
     # Sort by time
     unique_broadcasts.sort(key=lambda x: x['time'])
@@ -1375,12 +1451,15 @@ async def get_broadcasts_48h():
     unique_broadcasts = deduplicate_broadcasts(all_broadcasts)
     
     # Get odds for each unique broadcast
+    # Only try to get odds for events that likely have them (UFC, "against", or contain "-")
     for broadcast in unique_broadcasts:
-        home_team, away_team = extract_team_names(broadcast['event'])
-        if home_team and away_team:
-            odds = await get_odds(home_team, away_team)
-            if odds:
-                broadcast['odds'] = odds
+        event_title = broadcast['event'].lower()
+        if "ufc" in event_title or "против" in event_title or " - " in broadcast['event']:
+            home_team, away_team = extract_team_names(broadcast['event'])
+            if home_team and away_team:
+                odds = await get_odds(home_team, away_team)
+                if odds:
+                    broadcast['odds'] = odds
     
     logger.info(f"Successfully got {len(unique_broadcasts)} unique broadcasts from all sources")
     return unique_broadcasts
