@@ -16,16 +16,35 @@ logger = logging.getLogger(__name__)
 
 # Expanded sports keywords
 FOOTBALL_KEYWORDS = [
-    'футбол', 'рпл', 'апл', 'серия а', 'ла лига', 'бундеслига', 
+    'футбол', 'рпл', 'апл', 'серия а', 'ла лига', 'бундеслига',
     'лига чемпионов', 'лига европы', 'кубок', 'чемпионат'
 ]
 MMA_KEYWORDS = [
-    'mma', 'ufc', 'юфс', 'аса', 'bellator', 'fight night', 
+    'mma', 'ufc', 'юфс', 'аса', 'bellator', 'fight night',
     'прохазка', 'бой', 'единоборства', 'бокс'
 ]
 
-# Trash keywords to remove
-TRASH_KEYWORDS = ['войти на сайт', 'выход', 'эфир', 'телепрограмма']
+# Stop words that indicate non-sports events
+STOP_WORDS = [
+    'плавание', 'баскетбол', 'волейбол', 'хоккей', 'теннис', 'биатлон',
+    'лыжи', 'боулинг', 'кубок мира', 'гарри поттер'
+]
+
+# Trash keywords to remove (soft cleaning)
+TRASH_KEYWORDS = [
+    'войти на сайт', 'выход', 'эфир', 'телепрограмма',
+    'смотри в ultra hd с', 'переключай камеры', 'трансляция в ultra hd 4k',
+    'сегодня,', 'завтра,', 'футбол хоккей единоборства',
+    'сегодня', 'завтра', 'переключай камеры', 'смотри в ultra hd',
+    'Переключай камеры', 'Завтра,', 'Сегодня,'
+]
+
+# Date patterns to remove
+DATE_PATTERNS = [
+    r'\d{1,2} апр,', r'\d{1,2} мая,', r'\d{1,2} июн,', r'\d{1,2} июл,',
+    r'\d{1,2} авг,', r'\d{1,2} сен,', r'\d{1,2} окт,', r'\d{1,2} ноя,',
+    r'\d{1,2} дек,', r'\d{1,2} янв,', r'\d{1,2} фев,', r'\d{1,2} мар,'
+]
 
 def get_current_time():
     """Get current time in Moscow timezone"""
@@ -63,9 +82,16 @@ def clean_event_title(text):
     # Remove extra whitespace
     text = text.strip()
     
-    # Soft cleaning: remove specific advertising phrases
+    # Remove time at the beginning (e.g., "21:40")
+    text = re.sub(r'^\d{1,2}:\d{2}\s*', '', text)
+    
+    # Aggressive cleaning: remove specific advertising phrases
     for keyword in TRASH_KEYWORDS:
         text = text.replace(keyword, '')
+    
+    # Remove date patterns
+    for pattern in DATE_PATTERNS:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
     
     # Remove extra whitespace again
     text = re.sub(r'\s+', ' ', text).strip()
@@ -194,6 +220,10 @@ async def get_odds(home_team, away_team):
 
 def is_sports_event(title, genre=""):
     """Check if the event is a sports event we're interested in"""
+    # First check if we should ignore this event
+    if should_ignore_event(title):
+        return False
+    
     lower_title = title.lower()
     lower_genre = genre.lower() if genre else ""
     
@@ -204,6 +234,20 @@ def is_sports_event(title, genre=""):
     is_mma = any(keyword in lower_title or keyword in lower_genre for keyword in MMA_KEYWORDS)
     
     return is_football or is_mma
+
+def should_ignore_event(title):
+    """Check if event should be ignored based on stop words"""
+    lower_title = title.lower()
+    
+    # Check for stop words
+    for stop_word in STOP_WORDS:
+        if stop_word in lower_title:
+            # Exception: if title contains team names, don't ignore
+            # Check if there's a team match pattern (e.g., "Зенит - Краснодар")
+            if re.search(r'.*[-–—].*', title):
+                return False
+            return True
+    return False
 
 def determine_sport_type(title, genre=""):
     """Determine the sport type of an event"""
@@ -419,238 +463,6 @@ async def parse_matchtv_source(date_str=None):
         logger.error(f"Error parsing matchtv.ru: {e}")
         return []
 
-async def parse_championat_source(date_str=None):
-    """Parse sports broadcasts from championat.com"""
-    logger.info(f"Attempting to fetch data from championat.com for date {date_str or 'today'}")
-    
-    try:
-        # Use cloudscraper to avoid being blocked by the website
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'darwin',
-                'mobile': False
-            }
-        )
-        
-        # Use headers to avoid being blocked by the website
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0'
-        }
-        
-        if date_str:
-            url = f"https://www.championat.com/stat/tv/?date={date_str}"
-        else:
-            url = "https://www.championat.com/stat/tv/"
-        logger.info(f"Trying to fetch {url}")
-        
-        response = scraper.get(url, headers=headers, timeout=15)
-        
-        logger.info(f"championat.com returned status code: {response.status_code}")
-        
-        if response.status_code != 200:
-            logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
-            return []
-            
-        soup = BeautifulSoup(response.text, 'html.parser')
-        broadcasts = []
-        
-        # Get current time for filtering
-        current_time = get_current_time()
-        
-        # Look for TV schedule items
-        schedule_items = soup.find_all('div', class_=re.compile(r'tv.*item|tv-programme__item|tv-schedule__item', re.I))
-        
-        if not schedule_items:
-            # Try alternative selectors
-            schedule_items = soup.find_all('div', class_=re.compile(r'item|row', re.I))
-        
-        logger.info(f"Found {len(schedule_items)} schedule items on championat.com")
-        
-        for item in schedule_items:
-            try:
-                # Extract time
-                time_elem = item.find(['time', 'div'], class_=re.compile(r'time', re.I))
-                time_str = "N/A"
-                if time_elem:
-                    time_text = time_elem.get_text(strip=True)
-                    # Extract time in format HH:MM
-                    time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
-                    if time_match:
-                        time_str = time_match.group(1)
-                
-                # Extract title
-                title_elem = item.find(['h3', 'div'], class_=re.compile(r'title|name', re.I))
-                if not title_elem:
-                    title_elem = item.find('a')
-                
-                title = ""
-                if title_elem:
-                    title = title_elem.get_text(strip=True)
-                
-                # Clean the title
-                title = clean_event_title(title)
-                
-                # Skip if title is empty or too short
-                if not title or len(title) < 3:
-                    continue
-                
-                # Check for sports content
-                if is_sports_event(title):
-                    # Check if event is in the future
-                    if is_future_event(time_str, date_str, current_time):
-                        # Determine sport type
-                        sport_type = determine_sport_type(title)
-                        
-                        broadcast = {
-                            "time": time_str,
-                            "sport": sport_type,
-                            "event": title,
-                            "link": "https://www.championat.com/stat/tv/" if not date_str else f"https://www.championat.com/stat/tv/?date={date_str}",
-                            "source": "championat.com"
-                        }
-                        broadcasts.append(broadcast)
-                        logger.info(f"Found broadcast: {time_str} - {sport_type} - {title[:50]}...")
-                        
-            except Exception as e:
-                logger.warning(f"Error processing championat item: {e}")
-                continue
-        
-        # Sort by time
-        broadcasts.sort(key=lambda x: x['time'])
-        
-        logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from championat.com")
-        return broadcasts
-            
-    except Exception as e:
-        logger.error(f"Error parsing championat.com: {e}")
-        return []
-
-async def parse_sport_express_source(date_str=None):
-    """Parse sports broadcasts from sport-express.ru"""
-    logger.info(f"Attempting to fetch data from sport-express.ru for date {date_str or 'today'}")
-    
-    try:
-        # Use cloudscraper to avoid being blocked by the website
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'darwin',
-                'mobile': False
-            }
-        )
-        
-        # Use headers to avoid being blocked by the website
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0'
-        }
-        
-        if date_str:
-            url = f"https://www.sport-express.ru/live/?date={date_str}"
-        else:
-            url = "https://www.sport-express.ru/live/"
-        logger.info(f"Trying to fetch {url}")
-        
-        response = scraper.get(url, headers=headers, timeout=15)
-        
-        logger.info(f"sport-express.ru returned status code: {response.status_code}")
-        
-        if response.status_code != 200:
-            logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
-            return []
-            
-        soup = BeautifulSoup(response.text, 'html.parser')
-        broadcasts = []
-        
-        # Get current time for filtering
-        current_time = get_current_time()
-        
-        # Look for TV schedule items
-        schedule_items = soup.find_all('div', class_=re.compile(r'tv|schedule|broadcast', re.I))
-        
-        if not schedule_items:
-            # Try alternative selectors
-            schedule_items = soup.find_all('div', class_=re.compile(r'item|row', re.I))
-        
-        logger.info(f"Found {len(schedule_items)} schedule items on sport-express.ru")
-        
-        for item in schedule_items:
-            try:
-                # Extract time
-                time_elem = item.find(['time', 'div'], class_=re.compile(r'time', re.I))
-                time_str = "N/A"
-                if time_elem:
-                    time_text = time_elem.get_text(strip=True)
-                    # Extract time in format HH:MM
-                    time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
-                    if time_match:
-                        time_str = time_match.group(1)
-                
-                # Extract title
-                title_elem = item.find(['h3', 'h2', 'div'], class_=re.compile(r'title|name|event', re.I))
-                if not title_elem:
-                    title_elem = item.find('a')
-                
-                title = ""
-                if title_elem:
-                    title = title_elem.get_text(strip=True)
-                
-                # Clean the title
-                title = clean_event_title(title)
-                
-                # Skip if title is empty or too short
-                if not title or len(title) < 3:
-                    continue
-                
-                # Check for sports content
-                if is_sports_event(title):
-                    # Check if event is in the future
-                    if is_future_event(time_str, date_str, current_time):
-                        # Determine sport type
-                        sport_type = determine_sport_type(title)
-                        
-                        broadcast = {
-                            "time": time_str,
-                            "sport": sport_type,
-                            "event": title,
-                            "link": "https://www.sport-express.ru/live/" if not date_str else f"https://www.sport-express.ru/live/?date={date_str}",
-                            "source": "sport-express.ru"
-                        }
-                        broadcasts.append(broadcast)
-                        logger.info(f"Found broadcast: {time_str} - {sport_type} - {title[:50]}...")
-                        
-            except Exception as e:
-                logger.warning(f"Error processing sport-express.ru item: {e}")
-                continue
-        
-        # Sort by time
-        broadcasts.sort(key=lambda x: x['time'])
-        
-        logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from sport-express.ru")
-        return broadcasts
-            
-    except Exception as e:
-        logger.error(f"Error parsing sport-express.ru: {e}")
-        return []
-
 async def parse_sports_source(date_str=None):
     """Parse sports broadcasts from sports.ru"""
     logger.info(f"Attempting to fetch data from sports.ru for date {date_str or 'today'}")
@@ -746,8 +558,9 @@ async def parse_sports_source(date_str=None):
                 # Convert title to lowercase for matching
                 lower_title = title.lower()
                 
-                # Check for sports content
-                if is_sports_event(title):
+                # Simplified filter: if text contains specific keywords, take the match
+                sports_keywords = ["ufc", "mma", "бой", "юфс", "футбол", "рпл", "лига", "чемпионат"]
+                if any(keyword in lower_title for keyword in sports_keywords):
                     # Check if event is in the future
                     if is_future_event(time_str, date_str, current_time):
                         # Determine sport type
@@ -893,6 +706,124 @@ async def parse_liveresult_source(date_str=None):
         logger.error(f"Error parsing liveresult.ru: {e}")
         return []
 
+async def parse_fight_source(date_str=None):
+    """Parse sports broadcasts from fight.ru"""
+    logger.info(f"Attempting to fetch data from fight.ru for date {date_str or 'today'}")
+    
+    try:
+        # Use cloudscraper to avoid being blocked by the website
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'darwin',
+                'mobile': False
+            }
+        )
+        
+        # Use headers to avoid being blocked by the website
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        if date_str:
+            url = f"https://fight.ru/tv/?date={date_str}"
+        else:
+            url = "https://fight.ru/tv/"
+        logger.info(f"Trying to fetch {url}")
+        
+        response = scraper.get(url, headers=headers, timeout=15)
+        
+        logger.info(f"fight.ru returned status code: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
+            return []
+            
+        soup = BeautifulSoup(response.text, 'html.parser')
+        broadcasts = []
+        
+        # Get current time for filtering
+        current_time = get_current_time()
+        
+        # Look for TV schedule items
+        schedule_items = soup.find_all('div', class_=re.compile(r'event|match|broadcast', re.I))
+        
+        if not schedule_items:
+            # Try alternative selectors
+            schedule_items = soup.find_all('div', class_=re.compile(r'item|row', re.I))
+        
+        logger.info(f"Found {len(schedule_items)} schedule items on fight.ru")
+        
+        for item in schedule_items:
+            try:
+                # Extract time
+                time_elem = item.find(['time', 'div'], class_=re.compile(r'time', re.I))
+                time_str = "N/A"
+                if time_elem:
+                    time_text = time_elem.get_text(strip=True)
+                    # Extract time in format HH:MM
+                    time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
+                    if time_match:
+                        time_str = time_match.group(1)
+                
+                # Extract title
+                title_elem = item.find(['h3', 'div'], class_=re.compile(r'title|name|event', re.I))
+                if not title_elem:
+                    title_elem = item.find('a')
+                
+                title = ""
+                if title_elem:
+                    title = title_elem.get_text(strip=True)
+                
+                # Clean the title
+                title = clean_event_title(title)
+                
+                # Skip if title is empty or too short
+                if not title or len(title) < 3:
+                    continue
+                
+                # Focus only on MMA events for fight.ru
+                mma_keywords = ["ufc", "mma", "бой", "юфс", "аса", "bellator", "fight night", "прохазка", "единоборства", "бокс"]
+                lower_title = title.lower()
+                if any(keyword in lower_title for keyword in mma_keywords):
+                    # Check if event is in the future
+                    if is_future_event(time_str, date_str, current_time):
+                        # Determine sport type
+                        sport_type = determine_sport_type(title)
+                        
+                        broadcast = {
+                            "time": time_str,
+                            "sport": sport_type,
+                            "event": title,
+                            "link": "https://fight.ru/tv/" if not date_str else f"https://fight.ru/tv/?date={date_str}",
+                            "source": "fight.ru"
+                        }
+                        broadcasts.append(broadcast)
+                        logger.info(f"Found broadcast: {time_str} - {sport_type} - {title[:50]}...")
+                        
+            except Exception as e:
+                logger.warning(f"Error processing fight.ru item: {e}")
+                continue
+        
+        # Sort by time
+        broadcasts.sort(key=lambda x: x['time'])
+        
+        logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from fight.ru")
+        return broadcasts
+            
+    except Exception as e:
+        logger.error(f"Error parsing fight.ru: {e}")
+        return []
+
 def deduplicate_broadcasts(broadcasts):
     """Remove duplicate broadcasts based on event name and time similarity"""
     if not broadcasts:
@@ -930,13 +861,11 @@ async def get_broadcasts_48h():
     
     logger.info(f"Fetching data for {today_str} and {tomorrow_str}")
     
-    # Define sources
+    # Define sources (keeping only reliable sources)
     sources = [
         ("matchtv.ru", parse_matchtv_source),
-        ("championat.com", parse_championat_source),
-        ("sport-express.ru", parse_sport_express_source),
         ("sports.ru", parse_sports_source),
-        ("liveresult.ru", parse_liveresult_source),
+        ("fight.ru", parse_fight_source),
     ]
     
     all_broadcasts = []

@@ -4,7 +4,7 @@ A Telegram bot that aggregates sports broadcasts for the next 48 hours (today an
 
 ## Features
 
-- **Multi-source parsing**: Collects data from 5 reliable sports websites
+- **Multi-source parsing**: Collects data from 3 reliable sports websites
 - **Smart filtering**: Focuses on Football and MMA events only
 - **Fast execution**: Uses asyncio for concurrent requests, no time.sleep() delays
 - **Clean data**: Removes advertising text and normalizes event titles
@@ -15,11 +15,9 @@ A Telegram bot that aggregates sports broadcasts for the next 48 hours (today an
 
 ## Sources
 
-1. matchtv.ru
-2. sport-express.ru
-3. championat.com
-4. sports.ru
-5. liveresult.ru
+1. matchtv.ru (tvguide)
+2. sports.ru (TV section sports.ru/tv/)
+3. fight.ru (MMA events only)
 
 ## Requirements
 
