@@ -1392,7 +1392,7 @@ def deduplicate_broadcasts(broadcasts):
     unique_broadcasts.sort(key=lambda x: x['time'])
     return unique_broadcasts
 
-async def get_broadcasts_48h():
+async def get_broadcasts_48h(include_odds=True):
     """Get sports broadcasts for the next 48 hours using all sources"""
     logger.info("Starting 48-hour broadcast fetching")
     
@@ -1450,21 +1450,22 @@ async def get_broadcasts_48h():
     # Remove duplicates
     unique_broadcasts = deduplicate_broadcasts(all_broadcasts)
     
-    # Get odds for each unique broadcast
+    # Get odds for each unique broadcast if include_odds is True
     # Only try to get odds for events that likely have them (UFC, "against", or contain "-")
-    for broadcast in unique_broadcasts:
-        event_title = broadcast['event'].lower()
-        if "ufc" in event_title or "против" in event_title or " - " in broadcast['event']:
-            home_team, away_team = extract_team_names(broadcast['event'])
-            if home_team and away_team:
-                odds = await get_odds(home_team, away_team)
-                if odds:
-                    broadcast['odds'] = odds
+    if include_odds:
+        for broadcast in unique_broadcasts:
+            event_title = broadcast['event'].lower()
+            if "ufc" in event_title or "против" in event_title or " - " in broadcast['event']:
+                home_team, away_team = extract_team_names(broadcast['event'])
+                if home_team and away_team:
+                    odds = await get_odds(home_team, away_team)
+                    if odds:
+                        broadcast['odds'] = odds
     
     logger.info(f"Successfully got {len(unique_broadcasts)} unique broadcasts from all sources")
     return unique_broadcasts
 
-def format_broadcast_message(broadcasts):
+def format_broadcast_message(broadcasts, include_odds=True):
     """Format broadcasts into a message string with proper emojis and odds"""
     if not broadcasts:
         return "<b>Трансляций не найдено</b>"
@@ -1523,8 +1524,8 @@ def format_broadcast_message(broadcasts):
                 # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
                 message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
                 
-                # Add odds if available
-                if 'odds' in broadcast and broadcast['odds']:
+                # Add odds if available and include_odds is True
+                if include_odds and 'odds' in broadcast and broadcast['odds']:
                     safe_odds = escape_html(broadcast['odds'])
                     # Check if odds value is less than 1.1, don't show it
                     odds_match = re.search(r'[\d.]+', safe_odds)
@@ -1534,13 +1535,13 @@ def format_broadcast_message(broadcasts):
                             message_text += f"{safe_odds}\n"
                     else:
                         message_text += f"{safe_odds}\n"
-                else:
+                # else:
                     # Try to extract team names and get odds
-                    home_team, away_team = extract_team_names(broadcast['event'])
-                    if home_team and away_team:
+                    # home_team, away_team = extract_team_names(broadcast['event'])
+                    # if home_team and away_team:
                         # Note: In a real implementation, we would await get_odds here
                         # But since this is a sync function, we'll skip it for now
-                        pass
+                        # pass
                 
                 # Add link
                 safe_link = escape_html(broadcast['link'])
@@ -1575,8 +1576,8 @@ def format_broadcast_message(broadcasts):
                 # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
                 message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
                 
-                # Add odds if available
-                if 'odds' in broadcast and broadcast['odds']:
+                # Add odds if available and include_odds is True
+                if include_odds and 'odds' in broadcast and broadcast['odds']:
                     safe_odds = escape_html(broadcast['odds'])
                     # Check if odds value is less than 1.1, don't show it
                     odds_match = re.search(r'[\d.]+', safe_odds)
@@ -1607,6 +1608,127 @@ def format_broadcast_message(broadcasts):
         logger.error(f"Error formatting broadcast message: {e}")
         # Return a simple message even if formatting fails
         return f"📺 Найдено {len(broadcasts)} трансляций. Подробности смотрите на сайте."
+
+def format_odds_message(broadcasts):
+    """Format broadcasts into an odds-only message string for bettors"""
+    if not broadcasts:
+        return "<b>Коэффициентов не найдено</b>"
+    
+    try:
+        # Simple HTML escape function
+        def escape_html(text):
+            if not text:
+                return ""
+            # Simple replacement for HTML escaping
+            text = text.replace('&', '&')
+            text = text.replace('<', '<')
+            text = text.replace('>', '>')
+            text = text.replace('"', '"')
+            text = text.replace("'", "'")
+            return text
+        
+        # Filter broadcasts that have odds
+        broadcasts_with_odds = [b for b in broadcasts if 'odds' in b and b['odds']]
+        
+        if not broadcasts_with_odds:
+            return "<b>Коэффициентов не найдено</b>"
+        
+        # Group broadcasts by date
+        today_broadcasts = []
+        tomorrow_broadcasts = []
+        
+        current_time = get_current_time()
+        today_str = current_time.strftime("%Y-%m-%d")
+        tomorrow_time = current_time + timedelta(days=1)
+        tomorrow_str = tomorrow_time.strftime("%Y-%m-%d")
+        
+        for broadcast in broadcasts_with_odds:
+            # Clean the event title
+            broadcast['event'] = clean_event_title(broadcast['event'])
+            
+            # Group by date
+            broadcast_date = broadcast.get('date', today_str)
+            if broadcast_date == today_str:
+                today_broadcasts.append(broadcast)
+            elif broadcast_date == tomorrow_str:
+                tomorrow_broadcasts.append(broadcast)
+        
+        # Format message with separate sections for today and tomorrow
+        message_text = "📊 <b>Коэффициенты на ближайшие 48 часов:</b>\n\n"
+        
+        # Today's broadcasts
+        message_text += "<b>📅 СЕГОДНЯ:</b>\n"
+        if today_broadcasts:
+            for broadcast in today_broadcasts:
+                # Determine emoji based on sport type
+                emoji = "📺"
+                if broadcast['sport'] == "Football":
+                    emoji = "⚽"
+                elif broadcast['sport'] == "MMA":
+                    emoji = "🥊"
+                
+                # Extract clean team names
+                home_team, away_team = extract_team_names(broadcast['event'])
+                if home_team and away_team:
+                    teams_text = f"{home_team} - {away_team}"
+                else:
+                    teams_text = broadcast['event']
+                
+                # Escape HTML and limit length
+                safe_time = escape_html(broadcast['time'])
+                safe_teams = escape_html(teams_text)
+                
+                # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
+                message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_teams}\n"
+                
+                # Add odds
+                if 'odds' in broadcast and broadcast['odds']:
+                    safe_odds = escape_html(broadcast['odds'])
+                    # Extract just the odds part (remove "📊 Коэффициенты: ")
+                    odds_text = safe_odds.replace("📊 Коэффициенты: ", "")
+                    message_text += f"{odds_text}\n\n"
+        else:
+            message_text += "<i>Коэффициентов не найдено</i>\n\n"
+        
+        # Tomorrow's broadcasts
+        message_text += "<b>📅 ЗАВТРА:</b>\n"
+        if tomorrow_broadcasts:
+            for broadcast in tomorrow_broadcasts:
+                # Determine emoji based on sport type
+                emoji = "📺"
+                if broadcast['sport'] == "Football":
+                    emoji = "⚽"
+                elif broadcast['sport'] == "MMA":
+                    emoji = "🥊"
+                
+                # Extract clean team names
+                home_team, away_team = extract_team_names(broadcast['event'])
+                if home_team and away_team:
+                    teams_text = f"{home_team} - {away_team}"
+                else:
+                    teams_text = broadcast['event']
+                
+                # Escape HTML and limit length
+                safe_time = escape_html(broadcast['time'])
+                safe_teams = escape_html(teams_text)
+                
+                # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
+                message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_teams}\n"
+                
+                # Add odds
+                if 'odds' in broadcast and broadcast['odds']:
+                    safe_odds = escape_html(broadcast['odds'])
+                    # Extract just the odds part (remove "📊 Коэффициенты: ")
+                    odds_text = safe_odds.replace("📊 Коэффициенты: ", "")
+                    message_text += f"{odds_text}\n\n"
+        else:
+            message_text += "<i>Коэффициентов не найдено</i>\n\n"
+        
+        return message_text
+    except Exception as e:
+        logger.error(f"Error formatting odds message: {e}")
+        # Return a simple message even if formatting fails
+        return f"📊 Найдено {len([b for b in broadcasts if 'odds' in b and b['odds']])} коэффициентов."
 
 # Test function
 async def test_parser():

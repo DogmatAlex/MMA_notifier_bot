@@ -9,7 +9,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from config import TELEGRAM_BOT
-from parser import get_broadcasts_48h, format_broadcast_message
+from parser import get_broadcasts_48h, format_broadcast_message, format_odds_message
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,10 +34,33 @@ async def command_start_handler(message: Message) -> None:
         "🤖 Я буду присылать вам расписание трансляций MMA/UFC и футбола каждый день в 9:00.\n\n"
         "⌨️ Доступные команды:\n"
         "/today - Получить расписание на ближайшие 2 дня\n"
+        "/odds - Получить коэффициенты для беттинга\n"
         "/start - Показать это сообщение"
     )
     
     await message.answer(welcome_text, parse_mode="HTML")
+
+@router.message(Command(commands=["odds"]))
+async def command_odds_handler(message: Message) -> None:
+    """Handle /odds command - show only odds for bettors"""
+    chat_ids.add(message.chat.id)
+    
+    # Send typing action to show the bot is working
+    await bot.send_chat_action(message.chat.id, "typing")
+    
+    try:
+        # Get broadcasts for the next 48 hours with odds
+        broadcasts = await get_broadcasts_48h(include_odds=True)
+        logger.info(f"Bot received {len(broadcasts)} events for odds")
+        
+        # Format the message with odds only
+        message_text = format_odds_message(broadcasts)
+        
+        # Send the message
+        await message.answer(message_text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Error sending odds message: {e}")
+        await message.answer("⚠️ Ошибка при получении коэффициентов. Попробуйте позже.")
 
 @router.message(Command(commands=["today"]))
 async def command_today_handler(message: Message) -> None:
@@ -48,12 +71,12 @@ async def command_today_handler(message: Message) -> None:
     await bot.send_chat_action(message.chat.id, "typing")
     
     try:
-        # Get broadcasts for the next 48 hours
-        broadcasts = await get_broadcasts_48h()
+        # Get broadcasts for the next 48 hours without odds
+        broadcasts = await get_broadcasts_48h(include_odds=False)
         logger.info(f"Bot received {len(broadcasts)} events")
         
-        # Format the message
-        message_text = format_broadcast_message(broadcasts)
+        # Format the message without odds
+        message_text = format_broadcast_message(broadcasts, include_odds=False)
         
         # Send the message
         await message.answer(message_text, parse_mode="HTML")
@@ -64,11 +87,11 @@ async def command_today_handler(message: Message) -> None:
 async def send_daily():
     """Send daily notifications to all registered chats"""
     try:
-        # Get broadcasts for the next 48 hours
-        broadcasts = await get_broadcasts_48h()
+        # Get broadcasts for the next 48 hours without odds
+        broadcasts = await get_broadcasts_48h(include_odds=False)
         
-        # Format the message
-        text = format_broadcast_message(broadcasts)
+        # Format the message without odds
+        text = format_broadcast_message(broadcasts, include_odds=False)
         
         # Send to all registered chats
         for cid in chat_ids:
