@@ -28,7 +28,16 @@ chat_ids = set()
 async def command_start_handler(message: Message) -> None:
     """Handle /start command"""
     chat_ids.add(message.chat.id)
-    await message.answer("👋 Бот запущен! Жми /today, чтобы получить расписание на 48 часов.")
+    
+    welcome_text = (
+        "👋 Добро пожаловать в бот уведомлений о спортивных трансляциях!\n\n"
+        "🤖 Я буду присылать вам расписание трансляций MMA/UFC и футбола каждый день в 9:00.\n\n"
+        "⌨️ Доступные команды:\n"
+        "/today - Получить расписание на ближайшие 2 дня\n"
+        "/start - Показать это сообщение"
+    )
+    
+    await message.answer(welcome_text, parse_mode="HTML")
 
 @router.message(Command(commands=["today"]))
 async def command_today_handler(message: Message) -> None:
