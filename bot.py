@@ -47,7 +47,7 @@ async def command_today_handler(message: Message) -> None:
         message_text = format_broadcast_message(broadcasts)
         
         # Send the message
-        await message.answer(message_text, parse_mode="Markdown")
+        await message.answer(message_text, parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         await message.answer("⚠️ Ошибка при получении расписания. Попробуйте позже.")
@@ -64,7 +64,7 @@ async def send_daily():
         # Send to all registered chats
         for cid in chat_ids:
             try:
-                await bot.send_message(cid, text, parse_mode="Markdown")
+                await bot.send_message(cid, text, parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Error sending daily message to chat {cid}: {e}")
     except Exception as e:
