@@ -138,8 +138,11 @@ def extract_team_names(event_title):
 
 async def get_odds(home_team, away_team):
     """Get odds for a match from The Odds API"""
+    # If team names are None, don't even try to make the request
+    if not home_team or not away_team:
+        return None
+        
     if not ODDS_API_KEY:
-        logger.warning("ODDS_API_KEY not found in config")
         return None
     
     try:
@@ -155,18 +158,17 @@ async def get_odds(home_team, away_team):
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params, timeout=10) as response:
                 if response.status == 429:
-                    logger.warning("Odds API rate limit reached")
+                    # Rate limit reached, just return None without logging
                     return None
                     
                 if response.status != 200:
-                    logger.error(f"Odds API error: {response.status} - {await response.text()}")
+                    # API error, just return None without logging
                     return None
                     
                 data = await response.json()
                 
                 # Check if we have data
                 if not data:
-                    logger.warning(f"No data returned from Odds API for teams: {home_team} vs {away_team}")
                     return None
                     
                 # Search for matching events
@@ -243,10 +245,6 @@ def should_ignore_event(title):
     # Check for stop words
     for stop_word in STOP_WORDS:
         if stop_word in lower_title:
-            # Exception: if title contains team names, don't ignore
-            # Check if there's a team match pattern (e.g., "Зенит - Краснодар")
-            if re.search(r'.*[-–—].*', title):
-                return False
             return True
     return False
 
@@ -513,40 +511,55 @@ async def parse_sports_source(date_str=None):
         current_time = get_current_time()
         
         # Look for TV schedule items
-        schedule_items = soup.find_all('div', class_=re.compile(r'tv|schedule|broadcast', re.I))
+        # More aggressive search: look for any div that contains sports keywords in its children
+        all_divs = soup.find_all('div')
+        schedule_items = []
         
-        if not schedule_items:
-            # Try alternative selectors
-            schedule_items = soup.find_all('div', class_=re.compile(r'item|row', re.I))
+        sports_keywords = ["ufc", "mma", "бой", "юфс", "футбол", "рпл", "лига", "чемпионат"]
+        
+        for div in all_divs:
+            # Check if this div or any of its children contain sports keywords
+            div_text = div.get_text(strip=True).lower()
+            if any(keyword in div_text for keyword in sports_keywords):
+                # Also check if this div or its children have time information
+                time_elements = div.find_all(['time', 'div', 'span', 'a', 'p'], string=re.compile(r'\d{1,2}:\d{2}'))
+                if time_elements or re.search(r'\d{1,2}:\d{2}', div_text):
+                    schedule_items.append(div)
         
         logger.info(f"Found {len(schedule_items)} schedule items on sports.ru")
         
         for item in schedule_items:
             try:
-                # Extract time
-                time_elem = item.find(['time', 'div'], class_=re.compile(r'time', re.I))
+                # Extract time - look in the item and all its children
                 time_str = "N/A"
-                if time_elem:
-                    time_text = time_elem.get_text(strip=True)
-                    # Extract time in format HH:MM
-                    time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
-                    if time_match:
-                        time_str = time_match.group(1)
-                
-                # Extract title - look in all <a> and <span> tags
-                title_elem = item.find(['h3', 'h2', 'div'], class_=re.compile(r'title|name|event', re.I))
-                if not title_elem:
-                    # Look for <a> tags first
-                    title_elem = item.find('a')
-                if not title_elem:
-                    # Look for <span> tags
-                    title_elem = item.find('span')
-                
-                title = ""
-                if title_elem:
-                    title = title_elem.get_text(strip=True)
+                # Get all text from the item and search for time pattern
+                item_text = item.get_text()
+                time_match = re.search(r'(\d{1,2}:\d{2})', item_text)
+                if time_match:
+                    time_str = time_match.group(1)
                 else:
-                    # If no specific element found, get all text from the item
+                    # Try to find time in any child elements
+                    time_elements = item.find_all(string=re.compile(r'\d{1,2}:\d{2}'))
+                    if time_elements:
+                        time_match = re.search(r'(\d{1,2}:\d{2})', str(time_elements[0]))
+                        if time_match:
+                            time_str = time_match.group(1)
+                
+                # Extract title - look in all child elements (span, a, p, etc.)
+                title = ""
+                # Get text from all child elements
+                child_texts = []
+                for child in item.descendants:
+                    if child.name in ['span', 'a', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                        child_text = child.get_text(strip=True)
+                        if child_text:
+                            child_texts.append(child_text)
+                
+                # Join all child texts
+                if child_texts:
+                    title = " ".join(child_texts)
+                else:
+                    # Fallback to item text
                     title = item.get_text(strip=True)
                 
                 # Clean the title
@@ -559,8 +572,7 @@ async def parse_sports_source(date_str=None):
                 # Convert title to lowercase for matching
                 lower_title = title.lower()
                 
-                # Simplified filter: if text contains specific keywords, take the match
-                sports_keywords = ["ufc", "mma", "бой", "юфс", "футбол", "рпл", "лига", "чемпионат"]
+                # Check if text contains specific keywords
                 if any(keyword in lower_title for keyword in sports_keywords):
                     # Check if event is in the future
                     if is_future_event(time_str, date_str, current_time):
@@ -823,6 +835,98 @@ async def parse_fight_source(date_str=None):
             
     except Exception as e:
         logger.error(f"Error parsing fight.ru: {e}")
+        # Try to parse main page if /tv/ page is not available
+        try:
+            # Use cloudscraper to avoid being blocked by the website
+            scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'chrome',
+                    'platform': 'darwin',
+                    'mobile': False
+                }
+            )
+            
+            # Use headers to avoid being blocked by the website
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Cache-Control': 'max-age=0'
+            }
+            
+            main_url = "https://fight.ru/"
+            logger.info(f"Trying to fetch main page {main_url}")
+            main_response = scraper.get(main_url, headers=headers, timeout=15)
+            if main_response.status_code == 200:
+                main_soup = BeautifulSoup(main_response.text, 'html.parser')
+                # Look for elements with "ТВ" or "Трансляция" in text or class names
+                tv_elements = main_soup.find_all(['div', 'a', 'span'],
+                                                string=re.compile(r'ТВ|Трансляц', re.I))
+                if not tv_elements:
+                    # Try to find elements with TV or broadcast related class names
+                    tv_elements = main_soup.find_all(['div', 'a', 'span'],
+                                                    class_=re.compile(r'tv|broadcast|live', re.I))
+                
+                logger.info(f"Found {len(tv_elements)} TV elements on main page")
+                main_broadcasts = []
+                current_time = get_current_time()
+                
+                for elem in tv_elements:
+                    try:
+                        # Get text content
+                        elem_text = elem.get_text(strip=True)
+                        if len(elem_text) < 10:  # Skip very short texts
+                            continue
+                            
+                        # Look for time pattern
+                        time_match = re.search(r'(\d{1,2}:\d{2})', elem_text)
+                        time_str = "N/A"
+                        if time_match:
+                            time_str = time_match.group(1)
+                        
+                        # Check if it contains MMA/boxing keywords
+                        lower_text = elem_text.lower()
+                        mma_keywords = ["ufc", "mma", "бой", "юфс", "аса", "bellator", "fight night", "единоборства", "бокс"]
+                        if any(keyword in lower_text for keyword in mma_keywords):
+                            # Clean title
+                            title = clean_event_title(elem_text)
+                            if title and len(title) >= 3:
+                                # Check if event is in the future
+                                if is_future_event(time_str, date_str, current_time):
+                                    # Determine sport type
+                                    sport_type = determine_sport_type(title)
+                                    
+                                    # Get link if available
+                                    link = "https://fight.ru/"
+                                    if elem.name == 'a' and elem.get('href'):
+                                        href = elem.get('href')
+                                        if href.startswith('http'):
+                                            link = href
+                                        elif href.startswith('/'):
+                                            link = f"https://fight.ru{href}"
+                                    
+                                    broadcast = {
+                                        "time": time_str,
+                                        "sport": sport_type,
+                                        "event": title,
+                                        "link": link,
+                                        "source": "fight.ru"
+                                    }
+                                    main_broadcasts.append(broadcast)
+                                    logger.info(f"Found broadcast on main page: {time_str} - {sport_type} - {title[:50]}...")
+                    except Exception as e:
+                        logger.warning(f"Error processing fight.ru main page element: {e}")
+                        continue
+                
+                return main_broadcasts
+        except Exception as e:
+            logger.warning(f"Error parsing fight.ru main page: {e}")
         return []
 
 async def parse_championat_source(date_str=None):
@@ -854,9 +958,9 @@ async def parse_championat_source(date_str=None):
         }
         
         if date_str:
-            url = f"https://www.championat.com/tv/?date={date_str}"
+            url = f"https://www.championat.com/stat/tv/?date={date_str}"
         else:
-            url = "https://www.championat.com/tv/"
+            url = "https://www.championat.com/stat/tv/"
         logger.info(f"Trying to fetch {url}")
         
         response = scraper.get(url, headers=headers, timeout=15)
@@ -865,6 +969,75 @@ async def parse_championat_source(date_str=None):
         
         if response.status_code != 200:
             logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
+            # Try to parse main page if TV page is not available
+            try:
+                main_url = "https://www.championat.com/"
+                logger.info(f"Trying to fetch main page {main_url}")
+                main_response = scraper.get(main_url, headers=headers, timeout=15)
+                if main_response.status_code == 200:
+                    main_soup = BeautifulSoup(main_response.text, 'html.parser')
+                    # Look for elements with "ТВ" or "Трансляция" in text or class names
+                    tv_elements = main_soup.find_all(['div', 'a', 'span'],
+                                                    string=re.compile(r'ТВ|Трансляц', re.I))
+                    if not tv_elements:
+                        # Try to find elements with TV or broadcast related class names
+                        tv_elements = main_soup.find_all(['div', 'a', 'span'],
+                                                        class_=re.compile(r'tv|broadcast|live', re.I))
+                    
+                    logger.info(f"Found {len(tv_elements)} TV elements on main page")
+                    main_broadcasts = []
+                    current_time = get_current_time()
+                    
+                    for elem in tv_elements:
+                        try:
+                            # Get text content
+                            elem_text = elem.get_text(strip=True)
+                            if len(elem_text) < 10:  # Skip very short texts
+                                continue
+                                
+                            # Look for time pattern
+                            time_match = re.search(r'(\d{1,2}:\d{2})', elem_text)
+                            time_str = "N/A"
+                            if time_match:
+                                time_str = time_match.group(1)
+                            
+                            # Check if it contains sports keywords
+                            lower_text = elem_text.lower()
+                            sports_keywords = ["футбол", "mma", "ufc", "бой", "юфс", "бокс"]
+                            if any(keyword in lower_text for keyword in sports_keywords):
+                                # Clean title
+                                title = clean_event_title(elem_text)
+                                if title and len(title) >= 3:
+                                    # Check if event is in the future
+                                    if is_future_event(time_str, date_str, current_time):
+                                        # Determine sport type
+                                        sport_type = determine_sport_type(title)
+                                        
+                                        # Get link if available
+                                        link = "https://www.championat.com/"
+                                        if elem.name == 'a' and elem.get('href'):
+                                            href = elem.get('href')
+                                            if href.startswith('http'):
+                                                link = href
+                                            elif href.startswith('/'):
+                                                link = f"https://www.championat.com{href}"
+                                        
+                                        broadcast = {
+                                            "time": time_str,
+                                            "sport": sport_type,
+                                            "event": title,
+                                            "link": link,
+                                            "source": "championat.com"
+                                        }
+                                        main_broadcasts.append(broadcast)
+                                        logger.info(f"Found broadcast on main page: {time_str} - {sport_type} - {title[:50]}...")
+                        except Exception as e:
+                            logger.warning(f"Error processing championat main page element: {e}")
+                            continue
+                    
+                    return main_broadcasts
+            except Exception as e:
+                logger.warning(f"Error parsing championat main page: {e}")
             return []
             
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -977,6 +1150,75 @@ async def parse_sport_express_source(date_str=None):
         
         if response.status_code != 200:
             logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
+            # Try to parse main page if live page is not available
+            try:
+                main_url = "https://www.sport-express.ru/"
+                logger.info(f"Trying to fetch main page {main_url}")
+                main_response = scraper.get(main_url, headers=headers, timeout=15)
+                if main_response.status_code == 200:
+                    main_soup = BeautifulSoup(main_response.text, 'html.parser')
+                    # Look for elements with "ТВ" or "Трансляция" in text or class names
+                    tv_elements = main_soup.find_all(['div', 'a', 'span'],
+                                                    string=re.compile(r'ТВ|Трансляц', re.I))
+                    if not tv_elements:
+                        # Try to find elements with TV or broadcast related class names
+                        tv_elements = main_soup.find_all(['div', 'a', 'span'],
+                                                        class_=re.compile(r'tv|broadcast|live', re.I))
+                    
+                    logger.info(f"Found {len(tv_elements)} TV elements on main page")
+                    main_broadcasts = []
+                    current_time = get_current_time()
+                    
+                    for elem in tv_elements:
+                        try:
+                            # Get text content
+                            elem_text = elem.get_text(strip=True)
+                            if len(elem_text) < 10:  # Skip very short texts
+                                continue
+                                
+                            # Look for time pattern
+                            time_match = re.search(r'(\d{1,2}:\d{2})', elem_text)
+                            time_str = "N/A"
+                            if time_match:
+                                time_str = time_match.group(1)
+                            
+                            # Check if it contains sports keywords
+                            lower_text = elem_text.lower()
+                            sports_keywords = ["футбол", "mma", "ufc", "бой", "юфс", "бокс"]
+                            if any(keyword in lower_text for keyword in sports_keywords):
+                                # Clean title
+                                title = clean_event_title(elem_text)
+                                if title and len(title) >= 3:
+                                    # Check if event is in the future
+                                    if is_future_event(time_str, date_str, current_time):
+                                        # Determine sport type
+                                        sport_type = determine_sport_type(title)
+                                        
+                                        # Get link if available
+                                        link = "https://www.sport-express.ru/"
+                                        if elem.name == 'a' and elem.get('href'):
+                                            href = elem.get('href')
+                                            if href.startswith('http'):
+                                                link = href
+                                            elif href.startswith('/'):
+                                                link = f"https://www.sport-express.ru{href}"
+                                        
+                                        broadcast = {
+                                            "time": time_str,
+                                            "sport": sport_type,
+                                            "event": title,
+                                            "link": link,
+                                            "source": "sport-express.ru"
+                                        }
+                                        main_broadcasts.append(broadcast)
+                                        logger.info(f"Found broadcast on main page: {time_str} - {sport_type} - {title[:50]}...")
+                        except Exception as e:
+                            logger.warning(f"Error processing sport-express main page element: {e}")
+                            continue
+                    
+                    return main_broadcasts
+            except Exception as e:
+                logger.warning(f"Error parsing sport-express main page: {e}")
             return []
             
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -1226,13 +1468,13 @@ def format_broadcast_message(broadcasts):
                 # Add source information
                 source_name = broadcast.get('source', 'Unknown')
                 if source_name == "matchtv.ru":
-                    source_text = "Источник: МатчТВ"
+                    source_text = "MatchTV"
                     source_link = "https://matchtv.ru/on-air"
                 else:
-                    source_text = f"Источник: {source_name}"
+                    source_text = source_name
                     source_link = f"https://www.google.com/search?q={source_name}"
                 message_text += f"🔗 <a href='{safe_link}'>Смотреть трансляцию</a>\n"
-                message_text += f"📢 <a href='{source_link}'>{source_text}</a>\n\n"
+                message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
         else:
             message_text += "<i>Трансляций не найдено</i>\n\n"
         
@@ -1271,13 +1513,13 @@ def format_broadcast_message(broadcasts):
                 # Add source information
                 source_name = broadcast.get('source', 'Unknown')
                 if source_name == "matchtv.ru":
-                    source_text = "Источник: МатчТВ"
+                    source_text = "MatchTV"
                     source_link = "https://matchtv.ru/on-air"
                 else:
-                    source_text = f"Источник: {source_name}"
+                    source_text = source_name
                     source_link = f"https://www.google.com/search?q={source_name}"
                 message_text += f"🔗 <a href='{safe_link}'>Смотреть трансляцию</a>\n"
-                message_text += f"📢 <a href='{source_link}'>{source_text}</a>\n\n"
+                message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
         else:
             message_text += "<i>Трансляций не найдено</i>\n\n"
         
