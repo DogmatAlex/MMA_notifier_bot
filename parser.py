@@ -54,7 +54,7 @@ def get_current_time():
     return datetime.now()
 
 def is_future_event(event_time_str, event_date_str, current_time):
-    """Check if event time is in the future or within the past 2 hours, up to 24 hours ahead"""
+    """Check if event time is in the future or within the past 2 hours, up to 48 hours ahead"""
     try:
         hour, minute = map(int, event_time_str.split(':'))
         # Create event time for the specified date or today
@@ -66,9 +66,9 @@ def is_future_event(event_time_str, event_date_str, current_time):
             # Create event time for today
             event_time = current_time.replace(hour=hour, minute=minute, second=0, microsecond=0)
         
-        # Allow events from 2 hours ago to 24 hours ahead
+        # Allow events from 2 hours ago to 48 hours ahead
         past_threshold = current_time - timedelta(hours=2)
-        future_threshold = current_time + timedelta(hours=24)
+        future_threshold = current_time + timedelta(hours=48)
         
         # Check if event time is within the valid range
         return past_threshold <= event_time <= future_threshold
@@ -1543,9 +1543,9 @@ def deduplicate_broadcasts(broadcasts):
     unique_broadcasts.sort(key=lambda x: x['time'])
     return unique_broadcasts
 
-async def get_broadcasts_24h(include_odds=True, limit_sources=False):
-    """Get sports broadcasts for the next 24 hours using all sources"""
-    logger.info("Starting 24-hour broadcast fetching")
+async def get_broadcasts_48h(include_odds=True, limit_sources=False):
+    """Get sports broadcasts for the next 48 hours using all sources"""
+    logger.info("Starting 48-hour broadcast fetching")
     
     # Get current date and tomorrow's date in YYYY-MM-DD format
     current_time = get_current_time()
@@ -1923,7 +1923,7 @@ async def test_parser():
     print("Testing parser...")
     
     try:
-        broadcasts = await get_broadcasts_24h()
+        broadcasts = await get_broadcasts_48h()
         
         if broadcasts:
             print(f"\nFound {len(broadcasts)} unique broadcasts:")
