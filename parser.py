@@ -223,6 +223,92 @@ async def get_odds(home_team, away_team):
         logger.error(f"Error getting odds for {home_team} vs {away_team}: {e}")
         return None
 
+async def search_championat_match(home_team: str, away_team: str) -> str | None:
+    """
+    Search for a match on championat.com by team names
+    Returns: match URL if found, None otherwise
+    """
+    try:
+        # Use cloudscraper to avoid being blocked by the website
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'darwin',
+                'mobile': False
+            }
+        )
+        
+        # Use headers to avoid being blocked by the website
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        # Create search query with just team names
+        search_query = f"{home_team} {away_team}".replace(" ", "+")
+        search_url = f"https://www.championat.com/search/?q={search_query}"
+        
+        logger.info(f"Searching for match on championat.com: {home_team} vs {away_team}")
+        logger.info(f"Search URL: {search_url}")
+        
+        # Fetch the search results page with a timeout of 7 seconds
+        response = scraper.get(search_url, headers=headers, timeout=7)
+        
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch search results from championat.com, status code: {response.status_code}")
+            return None
+        
+        # Parse the HTML content
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Look for search results
+        search_results = soup.find_all(['div', 'a'], class_=re.compile(r'search|result|item', re.I))
+        
+        # If no results found with class search, try other selectors
+        if not search_results:
+            search_results = soup.find_all('a', href=re.compile(r'/football/|/mma/|/boxing/'))
+        
+        # Look for match links in search results
+        for result in search_results:
+            # Get the link
+            link = result.get('href') if result.name == 'a' else result.find('a')
+            if link:
+                href = link.get('href') if hasattr(link, 'get') else link
+                if href and re.match(r'/football/.*match/|/mma/.*match/|/boxing/.*match/', href):
+                    # Found a match link
+                    full_url = f"https://www.championat.com{href}" if href.startswith('/') else href
+                    logger.info(f"Found potential match URL: {full_url}")
+                    return full_url
+                
+                # Also check the text content for team names
+                result_text = result.get_text(strip=True).lower()
+                if home_team.lower() in result_text and away_team.lower() in result_text:
+                    # This result contains both team names
+                    href = result.get('href') if result.name == 'a' else None
+                    if href:
+                        full_url = f"https://www.championat.com{href}" if href.startswith('/') else href
+                        logger.info(f"Found potential match URL by team names: {full_url}")
+                        return full_url
+        
+        logger.info("No match found on championat.com")
+        return None
+                
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout while searching for match on championat.com: {home_team} vs {away_team}")
+        return None
+    except Exception as e:
+        logger.error(f"Error searching for match on championat.com {home_team} vs {away_team}: {e}")
+        return None
+
+
 async def parse_championat_odds(match_url: str) -> dict | None:
     """
     Parse odds from individual match page on championat.com
@@ -1622,21 +1708,33 @@ async def get_broadcasts_48h(include_odds=True, limit_sources=False):
                     odds_source = None
                     
                     # Only try championat.com if we're not limiting sources (i.e., for /odds command)
-                    if not limit_sources and broadcast.get('source') == 'championat.com' and 'link' in broadcast:
-                        # Try to get odds from championat.com match page
-                        championat_odds = await parse_championat_odds(broadcast['link'])
-                        if championat_odds:
-                            # Format odds for display
-                            p1 = championat_odds.get('P1')
-                            x = championat_odds.get('X')
-                            p2 = championat_odds.get('P2')
-                            
-                            if p1 and p2:
-                                if x:
-                                    odds = f"📊 Коэффициенты: П1: {p1} | Х: {x} | П2: {p2}"
-                                else:
-                                    odds = f"📊 Коэффициенты: П1: {p1} | П2: {p2}"
-                                odds_source = "championat.com"
+                    if not limit_sources:
+                        # Search for match on championat.com by team names
+                        logger.info(f"Searching for match on championat.com: {home_team} vs {away_team}")
+                        # Clean team names for search
+                        clean_home = re.sub(r'[^\w\s\-]', '', home_team).strip()
+                        clean_away = re.sub(r'[^\w\s\-]', '', away_team).strip()
+                        match_url = await search_championat_match(clean_home, clean_away)
+                        
+                        if match_url:
+                            # Try to get odds from championat.com match page
+                            championat_odds = await parse_championat_odds(match_url)
+                            if championat_odds:
+                                # Format odds for display
+                                p1 = championat_odds.get('P1')
+                                x = championat_odds.get('X')
+                                p2 = championat_odds.get('P2')
+                                
+                                if p1 and p2:
+                                    if x:
+                                        odds = f"📊 Коэффициенты: П1: {p1} | Х: {x} | П2: {p2}"
+                                    else:
+                                        odds = f"📊 Коэффициенты: П1: {p1} | П2: {p2}"
+                                    odds_source = "championat.com"
+                            else:
+                                logger.warning(f"Odds not found on championat.com page: {match_url}")
+                        else:
+                            logger.info(f"Match not found on championat.com for: {home_team} vs {away_team}")
                     
                     # Fallback to The Odds API if championat.com didn't work or wasn't applicable
                     if not odds:
@@ -1691,7 +1789,7 @@ def format_broadcast_message(broadcasts, include_odds=True):
                 tomorrow_broadcasts.append(broadcast)
         
         # Format message with separate sections for today and tomorrow
-        message_text = "🖥 <b>Расписание прямых трансляций на ближайшие 24 часа:</b>\n\n"
+        message_text = "🖥 <b>Расписание прямых трансляций на ближайшие сутки:</b>\n\n"
         
         # Today's broadcasts
         message_text += "<b>📅 СЕГОДНЯ:</b>\n"
@@ -1841,7 +1939,7 @@ def format_odds_message(broadcasts):
                 tomorrow_broadcasts.append(broadcast)
         
         # Format message with separate sections for today and tomorrow
-        message_text = "📊 <b>Коэффициенты на ближайшие 24 часа:</b>\n\n"
+        message_text = "📊 <b>Коэффициенты на ближайшие сутки:</b>\n\n"
         
         # Today's broadcasts
         message_text += "<b>📅 СЕГОДНЯ:</b>\n"
@@ -1873,7 +1971,17 @@ def format_odds_message(broadcasts):
                     safe_odds = escape_html(broadcast['odds'])
                     # Extract just the odds part (remove "📊 Коэффициенты: ")
                     odds_text = safe_odds.replace("📊 Коэффициенты: ", "")
-                    message_text += f"{odds_text}\n\n"
+                    message_text += f"{odds_text}"
+                    # Add source information
+                    odds_source = broadcast.get('odds_source', 'Unknown')
+                    if odds_source and odds_source != "championat.com":
+                        message_text += " 📡 <small>другой источник</small>"
+                    elif odds_source == "championat.com":
+                        message_text += " 📡 <small>championat.com</small>"
+                    message_text += "\n\n"
+                else:
+                    # Show message when odds are not available
+                    message_text += "⚠️ Коэффициенты для этого матча временно недоступны.\n\n"
         else:
             message_text += "<i>Коэффициентов не найдено</i>\n\n"
         
@@ -1907,7 +2015,17 @@ def format_odds_message(broadcasts):
                     safe_odds = escape_html(broadcast['odds'])
                     # Extract just the odds part (remove "📊 Коэффициенты: ")
                     odds_text = safe_odds.replace("📊 Коэффициенты: ", "")
-                    message_text += f"{odds_text}\n\n"
+                    message_text += f"{odds_text}"
+                    # Add source information
+                    odds_source = broadcast.get('odds_source', 'Unknown')
+                    if odds_source and odds_source != "championat.com":
+                        message_text += " 📡 <small>другой источник</small>"
+                    elif odds_source == "championat.com":
+                        message_text += " 📡 <small>championat.com</small>"
+                    message_text += "\n\n"
+                else:
+                    # Show message when odds are not available
+                    message_text += "⚠️ Коэффициенты для этого матча временно недоступны.\n\n"
         else:
             message_text += "<i>Коэффициентов не найдено</i>\n\n"
         
