@@ -223,6 +223,157 @@ async def get_odds(home_team, away_team):
         logger.error(f"Error getting odds for {home_team} vs {away_team}: {e}")
         return None
 
+async def parse_championat_odds(match_url: str) -> dict | None:
+    """
+    Parse odds from individual match page on championat.com
+    URL pattern: /{sport}/.../match/{match_id}/#stats
+    Returns: {'P1': float, 'X': float|None, 'P2': float, 'source': 'championat.com'}
+    """
+    try:
+        # Use cloudscraper to avoid being blocked by the website
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'darwin',
+                'mobile': False
+            }
+        )
+        
+        # Use headers to avoid being blocked by the website
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        logger.info(f"Attempting to fetch odds from championat.com: {match_url}")
+        
+        # Fetch the match page with a timeout of 7 seconds
+        response = scraper.get(match_url, headers=headers, timeout=7)
+        
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch {match_url}, status code: {response.status_code}")
+            return None
+        
+        # Parse the HTML content
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Look for odds in various possible locations
+        odds_data = {}
+        
+        # Try to find JSON-LD data first
+        json_scripts = soup.find_all('script', type='application/ld+json')
+        for script in json_scripts:
+            try:
+                json_data = json.loads(script.string)
+                # Check if this contains betting data
+                if isinstance(json_data, dict) and 'offers' in json_data:
+                    # Extract odds from offers
+                    offers = json_data.get('offers', [])
+                    if offers and isinstance(offers, list):
+                        for offer in offers:
+                            if isinstance(offer, dict) and 'price' in offer:
+                                # This is a simplified approach - in reality, we'd need to map
+                                # the offer to P1/X/P2 based on additional data
+                                pass
+            except (json.JSONDecodeError, TypeError):
+                continue
+        
+        # Look for odds in specific HTML elements
+        odds_containers = soup.find_all(['div', 'span', 'section'], class_=re.compile(r'match-bets|bet-item|odds|betting', re.I))
+        if not odds_containers:
+            # Try alternative selectors
+            odds_containers = soup.find_all(attrs={'data-bet-type': re.compile(r'1x2|match-result', re.I)})
+        
+        # Process each container looking for odds
+        p1_odds = None
+        x_odds = None
+        p2_odds = None
+        
+        for container in odds_containers:
+            # Look for text patterns that might contain odds
+            container_text = container.get_text(strip=True)
+            
+            # Pattern for decimal odds: P1: 2.45 | X: 3.20 | P2: 2.90
+            decimal_pattern = re.compile(r'[PП]1[:\s]*([\d.,]+).*?[XХ][:]?\s*([\d.,]+).*?[PП]2[:\s]*([\d.,]+)', re.DOTALL | re.IGNORECASE)
+            decimal_match = decimal_pattern.search(container_text)
+            
+            if decimal_match:
+                try:
+                    p1_odds = float(decimal_match.group(1).replace(',', '.'))
+                    x_odds = float(decimal_match.group(2).replace(',', '.'))
+                    p2_odds = float(decimal_match.group(3).replace(',', '.'))
+                    break  # Found what we're looking for
+                except ValueError:
+                    pass
+            
+            # Pattern for percentage odds: 24% | 18% | 58% (convert to decimal: 100/percentage)
+            percent_pattern = re.compile(r'(\d+)%.*?(\d+)%.*?(\d+)%', re.DOTALL)
+            percent_match = percent_pattern.search(container_text)
+            
+            if percent_match:
+                try:
+                    p1_pct = int(percent_match.group(1))
+                    x_pct = int(percent_match.group(2))
+                    p2_pct = int(percent_match.group(3))
+                    
+                    # Convert percentages to decimal odds (100/percentage)
+                    if p1_pct > 0:
+                        p1_odds = round(100 / p1_pct, 2)
+                    if x_pct > 0:
+                        x_odds = round(100 / x_pct, 2)
+                    if p2_pct > 0:
+                        p2_odds = round(100 / p2_pct, 2)
+                    break  # Found what we're looking for
+                except (ValueError, ZeroDivisionError):
+                    pass
+        
+        # If we still haven't found odds, look for individual elements
+        if not p1_odds or not x_odds or not p2_odds:
+            # Look for individual odds elements
+            odds_elements = soup.find_all(['span', 'div'], class_=re.compile(r'odds|coef|bet-odds', re.I))
+            for elem in odds_elements:
+                elem_text = elem.get_text(strip=True)
+                # Look for decimal numbers that might be odds
+                odds_numbers = re.findall(r'\b\d+[.,]?\d*\b', elem_text)
+                # If we find 3 numbers, assume they are P1, X, P2 odds
+                if len(odds_numbers) >= 3:
+                    try:
+                        p1_odds = float(odds_numbers[0].replace(',', '.'))
+                        x_odds = float(odds_numbers[1].replace(',', '.'))
+                        p2_odds = float(odds_numbers[2].replace(',', '.'))
+                        break
+                    except (ValueError, IndexError):
+                        continue
+        
+        # If we found odds, return them
+        if p1_odds or p2_odds:  # At minimum we need P1 and P2 odds
+            odds_data = {
+                'P1': p1_odds,
+                'X': x_odds,  # This can be None
+                'P2': p2_odds,
+                'source': 'championat.com'
+            }
+            logger.info(f"Successfully parsed odds from championat.com: {odds_data}")
+            return odds_data
+        else:
+            logger.info("No odds found on championat.com page")
+            return None
+                
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout while fetching odds from championat.com: {match_url}")
+        return None
+    except Exception as e:
+        logger.error(f"Error parsing odds from championat.com {match_url}: {e}")
+        return None
+
 def is_sports_event(title, genre=""):
     """Check if the event is a sports event we're interested in"""
     # First check if we should ignore this event
@@ -1392,7 +1543,7 @@ def deduplicate_broadcasts(broadcasts):
     unique_broadcasts.sort(key=lambda x: x['time'])
     return unique_broadcasts
 
-async def get_broadcasts_48h(include_odds=True):
+async def get_broadcasts_48h(include_odds=True, limit_sources=False):
     """Get sports broadcasts for the next 48 hours using all sources"""
     logger.info("Starting 48-hour broadcast fetching")
     
@@ -1405,13 +1556,21 @@ async def get_broadcasts_48h(include_odds=True):
     logger.info(f"Fetching data for {today_str} and {tomorrow_str}")
     
     # Define sources (keeping only reliable sources)
-    sources = [
-        ("matchtv.ru", parse_matchtv_source),
-        ("sports.ru", parse_sports_source),
-        ("fight.ru", parse_fight_source),
-        ("championat.com", parse_championat_source),
-        ("sport-express.ru", parse_sport_express_source),
-    ]
+    if limit_sources:
+        # For /today command - only matchtv.ru and fight.ru
+        sources = [
+            ("matchtv.ru", parse_matchtv_source),
+            ("fight.ru", parse_fight_source),
+        ]
+    else:
+        # For /odds command - all sources
+        sources = [
+            ("matchtv.ru", parse_matchtv_source),
+            ("sports.ru", parse_sports_source),
+            ("fight.ru", parse_fight_source),
+            ("championat.com", parse_championat_source),
+            ("sport-express.ru", parse_sport_express_source),
+        ]
     
     all_broadcasts = []
     
@@ -1458,9 +1617,37 @@ async def get_broadcasts_48h(include_odds=True):
             if "ufc" in event_title or "против" in event_title or " - " in broadcast['event']:
                 home_team, away_team = extract_team_names(broadcast['event'])
                 if home_team and away_team:
-                    odds = await get_odds(home_team, away_team)
+                    # Try to get odds from championat.com first if we're not limiting sources
+                    odds = None
+                    odds_source = None
+                    
+                    # Only try championat.com if we're not limiting sources (i.e., for /odds command)
+                    if not limit_sources and broadcast.get('source') == 'championat.com' and 'link' in broadcast:
+                        # Try to get odds from championat.com match page
+                        championat_odds = await parse_championat_odds(broadcast['link'])
+                        if championat_odds:
+                            # Format odds for display
+                            p1 = championat_odds.get('P1')
+                            x = championat_odds.get('X')
+                            p2 = championat_odds.get('P2')
+                            
+                            if p1 and p2:
+                                if x:
+                                    odds = f"📊 Коэффициенты: П1: {p1} | Х: {x} | П2: {p2}"
+                                else:
+                                    odds = f"📊 Коэффициенты: П1: {p1} | П2: {p2}"
+                                odds_source = "championat.com"
+                    
+                    # Fallback to The Odds API if championat.com didn't work or wasn't applicable
+                    if not odds:
+                        odds = await get_odds(home_team, away_team)
+                        if odds:
+                            odds_source = "The-Odds-API"
+                    
+                    # Add odds to broadcast if found
                     if odds:
                         broadcast['odds'] = odds
+                        broadcast['odds_source'] = odds_source
     
     logger.info(f"Successfully got {len(unique_broadcasts)} unique broadcasts from all sources")
     return unique_broadcasts
@@ -1504,14 +1691,14 @@ def format_broadcast_message(broadcasts, include_odds=True):
                 tomorrow_broadcasts.append(broadcast)
         
         # Format message with separate sections for today and tomorrow
-        message_text = "📺 <b>Расписание прямых трансляций на ближайшие 48 часов:</b>\n\n"
+        message_text = "🖥 <b>Расписание прямых трансляций на ближайшие 48 часов:</b>\n\n"
         
         # Today's broadcasts
         message_text += "<b>📅 СЕГОДНЯ:</b>\n"
         if today_broadcasts:
             for broadcast in today_broadcasts:
                 # Determine emoji based on sport type
-                emoji = "📺"
+                emoji = "🖥"
                 if broadcast['sport'] == "Football":
                     emoji = "⚽"
                 elif broadcast['sport'] == "MMA":
@@ -1563,7 +1750,7 @@ def format_broadcast_message(broadcasts, include_odds=True):
         if tomorrow_broadcasts:
             for broadcast in tomorrow_broadcasts:
                 # Determine emoji based on sport type
-                emoji = "📺"
+                emoji = "🖥"
                 if broadcast['sport'] == "Football":
                     emoji = "⚽"
                 elif broadcast['sport'] == "MMA":
@@ -1607,7 +1794,7 @@ def format_broadcast_message(broadcasts, include_odds=True):
     except Exception as e:
         logger.error(f"Error formatting broadcast message: {e}")
         # Return a simple message even if formatting fails
-        return f"📺 Найдено {len(broadcasts)} трансляций. Подробности смотрите на сайте."
+        return f"🖥 Найдено {len(broadcasts)} трансляций. Подробности смотрите на сайте."
 
 def format_odds_message(broadcasts):
     """Format broadcasts into an odds-only message string for bettors"""
@@ -1661,7 +1848,7 @@ def format_odds_message(broadcasts):
         if today_broadcasts:
             for broadcast in today_broadcasts:
                 # Determine emoji based on sport type
-                emoji = "📺"
+                emoji = "🖥"
                 if broadcast['sport'] == "Football":
                     emoji = "⚽"
                 elif broadcast['sport'] == "MMA":
@@ -1695,7 +1882,7 @@ def format_odds_message(broadcasts):
         if tomorrow_broadcasts:
             for broadcast in tomorrow_broadcasts:
                 # Determine emoji based on sport type
-                emoji = "📺"
+                emoji = "🖥"
                 if broadcast['sport'] == "Football":
                     emoji = "⚽"
                 elif broadcast['sport'] == "MMA":

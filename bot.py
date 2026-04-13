@@ -71,8 +71,8 @@ async def command_today_handler(message: Message) -> None:
     await bot.send_chat_action(message.chat.id, "typing")
     
     try:
-        # Get broadcasts for the next 48 hours without odds
-        broadcasts = await get_broadcasts_48h(include_odds=False)
+        # Get broadcasts for the next 48 hours without odds, limited sources
+        broadcasts = await get_broadcasts_48h(include_odds=False, limit_sources=True)
         logger.info(f"Bot received {len(broadcasts)} events")
         
         # Format the message without odds
@@ -87,8 +87,8 @@ async def command_today_handler(message: Message) -> None:
 async def send_daily():
     """Send daily notifications to all registered chats"""
     try:
-        # Get broadcasts for the next 48 hours without odds
-        broadcasts = await get_broadcasts_48h(include_odds=False)
+        # Get broadcasts for the next 48 hours without odds, limited sources
+        broadcasts = await get_broadcasts_48h(include_odds=False, limit_sources=True)
         
         # Format the message without odds
         text = format_broadcast_message(broadcasts, include_odds=False)
