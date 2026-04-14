@@ -795,8 +795,6 @@ def format_broadcast_message(broadcasts):
                 # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
                 message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
                 
-                # Add link
-                safe_link = escape_html(broadcast['link'])
                 # Add source information
                 source_name = broadcast.get('source', 'Unknown')
                 if source_name == "matchtv.ru":
@@ -805,7 +803,6 @@ def format_broadcast_message(broadcasts):
                 else:
                     source_text = source_name
                     source_link = f"https://www.google.com/search?q={source_name}"
-                message_text += f"🔗 <a href='{safe_link}'>Смотреть трансляцию</a>\n"
                 message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
         else:
             message_text += "<i>Трансляций не найдено</i>\n\n"
@@ -828,8 +825,6 @@ def format_broadcast_message(broadcasts):
                 # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
                 message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
                 
-                # Add link
-                safe_link = escape_html(broadcast['link'])
                 # Add source information
                 source_name = broadcast.get('source', 'Unknown')
                 if source_name == "matchtv.ru":
@@ -838,7 +833,6 @@ def format_broadcast_message(broadcasts):
                 else:
                     source_text = source_name
                     source_link = f"https://www.google.com/search?q={source_name}"
-                message_text += f"🔗 <a href='{safe_link}'>Смотреть трансляцию</a>\n"
                 message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
         else:
             message_text += "<i>Трансляций не найдено</i>\n\n"
@@ -877,3 +871,4 @@ async def test_parser():
 if __name__ == "__main__":
     # Run the test
     asyncio.run(test_parser())
+    
