@@ -9,7 +9,11 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from config import TELEGRAM_BOT
-from parser import get_broadcasts_48h, format_broadcast_message, format_odds_message
+# Для /today
+from parser import get_broadcasts_48h, format_broadcast_message
+
+# Для /odds
+from odds_parser import get_odds_broadcasts, format_odds_message
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -50,7 +54,7 @@ async def command_odds_handler(message: Message) -> None:
     
     try:
         # Get broadcasts for the next 48 hours with odds
-        broadcasts = await get_broadcasts_48h(include_odds=True)
+        broadcasts = await get_odds_broadcasts()
         logger.info(f"Bot received {len(broadcasts)} events for odds")
         
         # Format the message with odds only
@@ -71,12 +75,12 @@ async def command_today_handler(message: Message) -> None:
     await bot.send_chat_action(message.chat.id, "typing")
     
     try:
-        # Get broadcasts for the next 48 hours without odds, limited sources
-        broadcasts = await get_broadcasts_48h(include_odds=False, limit_sources=True)
+        # Get broadcasts for the next 48 hours without odds
+        broadcasts = await get_broadcasts_48h()
         logger.info(f"Bot received {len(broadcasts)} events")
         
         # Format the message without odds
-        message_text = format_broadcast_message(broadcasts, include_odds=False)
+        message_text = format_broadcast_message(broadcasts)
         
         # Send the message
         await message.answer(message_text, parse_mode="HTML")
@@ -87,11 +91,11 @@ async def command_today_handler(message: Message) -> None:
 async def send_daily():
     """Send daily notifications to all registered chats"""
     try:
-        # Get broadcasts for the next 48 hours without odds, limited sources
-        broadcasts = await get_broadcasts_48h(include_odds=False, limit_sources=True)
+        # Get broadcasts for the next 48 hours without odds
+        broadcasts = await get_broadcasts_48h()
         
         # Format the message without odds
-        text = format_broadcast_message(broadcasts, include_odds=False)
+        text = format_broadcast_message(broadcasts)
         
         # Send to all registered chats
         for cid in chat_ids:
