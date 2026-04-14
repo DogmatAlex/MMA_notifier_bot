@@ -10,7 +10,8 @@ import os
 # Add the current directory to the path so we can import our modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from parser import get_broadcasts_48h, format_broadcast_message, format_odds_message
+from parser import get_broadcasts_48h, format_broadcast_message
+from odds_parser import format_odds_message, get_odds_broadcasts
 
 async def test_full_bot():
     """Test the full bot functionality"""
@@ -19,7 +20,7 @@ async def test_full_bot():
     try:
         # Test parsing with odds
         print("1. Testing parsing with odds...")
-        broadcasts_with_odds = await get_broadcasts_48h(include_odds=True)
+        broadcasts_with_odds = await get_odds_broadcasts()
         print(f"   Found {len(broadcasts_with_odds)} broadcasts with odds")
         
         # Show source distribution
@@ -43,7 +44,7 @@ async def test_full_bot():
         
         # Test parsing without odds
         print("\n2. Testing parsing without odds...")
-        broadcasts_without_odds = await get_broadcasts_48h(include_odds=False)
+        broadcasts_without_odds = await get_broadcasts_48h()
         print(f"   Found {len(broadcasts_without_odds)} broadcasts without odds")
         
         # Verify that both results have the same number of broadcasts
@@ -54,7 +55,7 @@ async def test_full_bot():
         
         # Test schedule-only formatting
         print("\n3. Testing schedule-only message formatting...")
-        schedule_message = format_broadcast_message(broadcasts_without_odds, include_odds=False)
+        schedule_message = format_broadcast_message(broadcasts_without_odds)
         print(f"   Formatted schedule message length: {len(schedule_message)} characters")
         print(f"   Schedule message preview: {schedule_message[:300]}...")
         

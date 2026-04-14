@@ -1,0 +1,57 @@
+FULL MESSAGE:
+🖥 <b>Расписание прямых трансляций на ближайшие сутки:</b>
+
+<b>📅 СЕГОДНЯ:</b>
+⏰ 00:00 | 🥊 <b>MMA</b>: UFC Fight Night Смешанные единоборства. Гилберт Бернс против Майка Мэлотта
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 00:00 | 🥊 <b>MMA</b>: UFC Fight Night
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 11:00 | ⚽ <b>Football</b>: Оренбург - Локомотив Футбол. МИР Российская Премьер-Лига. Тур 25
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 14:15 | ⚽ <b>Football</b>: Крылья Советов - ЦСКА Футбол. МИР Российская Премьер-Лига. Тур 25
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 16:30 | ⚽ <b>Football</b>: Рубин - Акрон Футбол. МИР Российская Премьер-Лига. Тур 25
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 19:00 | ⚽ <b>Football</b>: Пари НН - Динамо Футбол. МИР Российская Премьер-Лига. Тур 25
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 21:30 | ⚽ <b>Football</b>: Атлетико - Реал Сосьедад Футбол. Кубок Испании. Финал
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 21:40 | ⚽ <b>Football</b>: Интер - Кальяри Футбол. Чемпионат Италии. Тур 33
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 22:00 | ⚽ <b>Football</b>: Арсенал - Спортинг
+📡 <b>Источник:</b> <a href='https://www.google.com/search?q=championat.com'>championat.com</a>
+
+⏰ 22:00 | ⚽ <b>Football</b>: Бавария - Реал Мадрид
+📡 <b>Источник:</b> <a href='https://www.google.com/search?q=championat.com'>championat.com</a>
+
+<b>📅 ЗАВТРА:</b>
+⏰ 02:25 | 🥊 <b>MMA</b>: Профессиональный бокс. IBA Bare Knuckle. Йоэль Ромеро против Вагаба Вагабова. Искандар Зияев против Тимура Мусаева. Трансляция из Санкт-Петербурга [16
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 03:45 | 🥊 <b>MMA</b>: Профессиональный бокс. Winline Ночь Чемпионов IBA. Муслим Гаджимагомедов против Табисо Мчуну. Артем Сусленков против Джека Муловайи. Трансляция из Мос
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 06:35 | 🥊 <b>MMA</b>: Смешанные единоборства. UFC Fight Night. Гилберт Бёрнс против Майкла Моралеса. Трансляция из США [16+]
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 09:35 | 🥊 <b>MMA</b>: Профессиональный бокс. Бетсити. IBA.PRO 4. Алексей Егоров против Ленара Переса. Трансляция из Боснии и Герцеговины [16+]
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 10:30 | 🥊 <b>MMA</b>: Профессиональный бокс. Артём Сусленков против Агрона Смакичи. Трансляция из Грозного [16+]
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 21:05 | 🥊 <b>MMA</b>: Бокс. Bare Knuckle FC. Крис Камоцци против Алессио Сакара. Франко Теналья против Бена Боннера. Трансляция из Италии [16+]
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+⏰ 23:30 | 🥊 <b>MMA</b>: Смешанные единоборства. UFC 327. Патрисио Питбуль против Аарона Пико. Матеуш Гамрот против Эстебана Рибовича. Трансляция из США [16+]
+📡 <b>Источник:</b> <a href='https://matchtv.ru/on-air'>MatchTV</a>
+
+

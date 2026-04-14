@@ -431,6 +431,96 @@ async def parse_fight_source(date_str=None):
             except Exception as e:
                 logger.warning(f"Error fetching translations URL: {e}")
                 return []
+                # Try to get the schedule page
+                if date_str:
+                    url = f"https://www.championat.com/stat/football/#date={date_str}"
+                else:
+                    url = "https://www.championat.com/stat/football/"
+                    
+                logger.info(f"Fetching data from {url}")
+                response = scraper.get(url, headers=headers, timeout=10)
+                
+                if response.status_code != 200:
+                    logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
+                    return []
+                
+                # Parse the HTML content
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                broadcasts = []
+                
+                # Get current time for filtering
+                current_time = get_current_time()
+                
+                # Look for match links with UCL pattern
+                # Find all links that contain /football/_ucl/ in href
+                match_links = soup.find_all('a', href=re.compile(r'/football/_ucl/.*/match/\d+/'))
+                
+                logger.info(f"Found {len(match_links)} potential UCL matches")
+                
+                for link in match_links:
+                    try:
+                        # Extract time from span with class seo-results__item-date
+                        time_elem = link.find_previous('span', class_='seo-results__item-date')
+                        time_str = "N/A"
+                        if time_elem:
+                            time_text = time_elem.get_text(strip=True)
+                            # Extract time in format HH:MM
+                            time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
+                            if time_match:
+                                time_str = time_match.group(1)
+                        
+                        # Extract match title from link text
+                        title = link.get_text(strip=True)
+                        
+                        # Skip if title is empty
+                        if not title:
+                            continue
+                        
+                        # Clean the title
+                        title = clean_event_title(title)
+                        
+                        # Apply extract_team_names for proper team name handling
+                        home_team, away_team = extract_team_names(title)
+                        if home_team and away_team:
+                            title = f"{home_team} - {away_team}"
+                        
+                        # Skip if title is empty or too short after cleaning
+                        if not title or len(title) < 3:
+                            continue
+                        
+                        # Create full URL
+                        match_url = "https://www.championat.com" + link['href'] if link.get('href', '').startswith('/') else link['href']
+                        
+                        # Check if event is in the future
+                        if is_future_event(time_str, date_str, current_time):
+                            broadcast = {
+                                "time": time_str,
+                                "sport": "Football",
+                                "event": title,
+                                "link": match_url,
+                                "source": "championat.com"
+                            }
+                            broadcasts.append(broadcast)
+                            logger.info(f"Found UCL broadcast: {time_str} - Football - {title[:50]}...")
+                            
+                            # Limit to prevent too many matches
+                            if len(broadcasts) >= 20:
+                                break
+                                
+                    except Exception as e:
+                        logger.warning(f"Error processing championat.com match link: {e}")
+                        continue
+                
+                # Sort by time
+                broadcasts.sort(key=lambda x: x['time'])
+                
+                logger.info(f"Successfully parsed {len(broadcasts)} UCL broadcasts from championat.com")
+                return broadcasts
+                    
+            except Exception as e:
+                logger.error(f"Error parsing championat.com: {e}")
+                return []
             
         soup = BeautifulSoup(response.text, 'html.parser')
         broadcasts = []
@@ -600,6 +690,129 @@ async def parse_fight_source(date_str=None):
             logger.warning(f"Error parsing fight.ru main page: {e}")
         return []
 
+async def parse_championat_ucl_source(date_str=None) -> list:
+    """
+    Parse ONLY Champions League matches from championat.com
+    URL pattern: https://www.championat.com/stat/#YYYY-MM-DD
+    Returns: list of broadcasts in standard format
+    """
+    logger.info(f"Attempting to fetch Champions League data from championat.com for date {date_str or 'today'}")
+    
+    try:
+        # Use cloudscraper to avoid being blocked by the website
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'darwin',
+                'mobile': False
+            }
+        )
+        
+        # Use headers to avoid being blocked by the website
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        # Try to get the schedule page
+        if date_str:
+            url = f"https://www.championat.com/stat/football/#date={date_str}"
+        else:
+            url = "https://www.championat.com/stat/football/"
+            
+        logger.info(f"Fetching data from {url}")
+        response = scraper.get(url, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
+            return []
+        
+        # Parse the HTML content
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        broadcasts = []
+        
+        # Get current time for filtering
+        current_time = get_current_time()
+        
+        # Look for match links with UCL pattern
+        # Find all links that contain /football/_ucl/ in href
+        match_links = soup.find_all('a', href=re.compile(r'/football/_ucl/.*/match/\d+/'))
+        
+        logger.info(f"Found {len(match_links)} potential UCL matches")
+        
+        for link in match_links:
+            try:
+                # Extract time from span with class seo-results__item-date
+                time_elem = link.find_previous('span', class_='seo-results__item-date')
+                time_str = "N/A"
+                if time_elem:
+                    time_text = time_elem.get_text(strip=True)
+                    # Extract time in format HH:MM
+                    time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
+                    if time_match:
+                        time_str = time_match.group(1)
+                
+                # Extract match title from link text
+                title = link.get_text(strip=True)
+                
+                # Skip if title is empty
+                if not title:
+                    continue
+                
+                # Clean the title
+                title = clean_event_title(title)
+                
+                # Apply extract_team_names for proper team name handling
+                home_team, away_team = extract_team_names(title)
+                if home_team and away_team:
+                    title = f"{home_team} - {away_team}"
+                
+                # Skip if title is empty or too short after cleaning
+                if not title or len(title) < 3:
+                    continue
+                
+                # Create full URL
+                match_url = "https://www.championat.com" + link['href'] if link.get('href', '').startswith('/') else link['href']
+                
+                # Check if event is in the future
+                if is_future_event(time_str, date_str, current_time):
+                    broadcast = {
+                        "time": time_str,
+                        "sport": "Football",
+                        "event": title,
+                        "link": match_url,
+                        "source": "championat.com"
+                    }
+                    broadcasts.append(broadcast)
+                    logger.info(f"Found UCL broadcast: {time_str} - Football - {title[:50]}...")
+                    
+                    # Limit to prevent too many matches
+                    if len(broadcasts) >= 20:
+                        break
+                        
+            except Exception as e:
+                logger.warning(f"Error processing championat.com match link: {e}")
+                continue
+        
+        # Sort by time
+        broadcasts.sort(key=lambda x: x['time'])
+        
+        logger.info(f"Successfully parsed {len(broadcasts)} UCL broadcasts from championat.com")
+        return broadcasts
+            
+    except Exception as e:
+        logger.error(f"Error parsing championat.com: {e}")
+        return []
+
 def deduplicate_broadcasts(broadcasts):
     """Remove duplicate broadcasts based on event name and time similarity"""
     if not broadcasts:
@@ -679,7 +892,7 @@ def deduplicate_broadcasts(broadcasts):
     return unique_broadcasts
 
 async def get_broadcasts_48h():
-    """Get sports broadcasts for the next 48 hours using only matchtv.ru and fight.ru sources"""
+    """Get sports broadcasts for the next 48 hours using matchtv.ru, fight.ru, and championat.com sources"""
     logger.info("Starting 48-hour broadcast fetching")
     
     # Get current date and tomorrow's date in YYYY-MM-DD format
@@ -690,10 +903,11 @@ async def get_broadcasts_48h():
     
     logger.info(f"Fetching data for {today_str} and {tomorrow_str}")
     
-    # Define sources (only matchtv.ru and fight.ru for /today command)
+    # Define sources (matchtv.ru, fight.ru, and championat.com for /today command)
     sources = [
         ("matchtv.ru", parse_matchtv_source),
         ("fight.ru", parse_fight_source),
+        ("championat.com", parse_championat_ucl_source),  # ← новая строка
     ]
     
     all_broadcasts = []
@@ -735,6 +949,230 @@ async def get_broadcasts_48h():
     
     logger.info(f"Successfully got {len(unique_broadcasts)} unique broadcasts from all sources")
     return unique_broadcasts
+
+def format_broadcast_message(broadcasts):
+    """Format broadcasts into a message string with proper emojis and without odds"""
+    if not broadcasts:
+        return "<b>Трансляций не найдено</b>"
+    
+    try:
+        # Simple HTML escape function
+        def escape_html(text):
+            if not text:
+                return ""
+            # Simple replacement for HTML escaping
+            text = text.replace('&', '&')
+            text = text.replace('<', '<')
+            text = text.replace('>', '>')
+            text = text.replace('"', '"')
+            text = text.replace("'", "'")
+            return text
+        
+        # Group broadcasts by date
+        today_broadcasts = []
+        tomorrow_broadcasts = []
+        
+        current_time = get_current_time()
+        today_str = current_time.strftime("%Y-%m-%d")
+        tomorrow_time = current_time + timedelta(days=1)
+        tomorrow_str = tomorrow_time.strftime("%Y-%m-%d")
+        
+        for broadcast in broadcasts:
+            # Clean the event title
+            broadcast['event'] = clean_event_title(broadcast['event'])
+            
+            # Group by date
+            broadcast_date = broadcast.get('date', today_str)
+            if broadcast_date == today_str:
+                today_broadcasts.append(broadcast)
+            elif broadcast_date == tomorrow_str:
+                tomorrow_broadcasts.append(broadcast)
+        
+        # Format message with separate sections for today and tomorrow
+        message_text = "🖥 <b>Расписание прямых трансляций на ближайшие сутки:</b>\n\n"
+        
+        # Today's broadcasts
+        message_text += "<b>📅 СЕГОДНЯ:</b>\n"
+        if today_broadcasts:
+            for broadcast in today_broadcasts:
+                # Determine emoji based on sport type
+                emoji = "🖥"
+                if broadcast['sport'] == "Football":
+                    emoji = "⚽"
+                elif broadcast['sport'] == "MMA":
+                    emoji = "🥊"
+                
+                # Escape HTML and limit length
+                safe_time = escape_html(broadcast['time'])
+                safe_event = escape_html(broadcast['event'])
+                
+                # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
+                message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
+                
+                # Add source information
+                source_name = broadcast.get('source', 'Unknown')
+                if source_name == "matchtv.ru":
+                    source_text = "MatchTV"
+                    source_link = "https://matchtv.ru/on-air"
+                else:
+                    source_text = source_name
+                    source_link = f"https://www.google.com/search?q={source_name}"
+                message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
+        else:
+            message_text += "<i>Трансляций не найдено</i>\n\n"
+        
+        # Tomorrow's broadcasts
+        message_text += "<b>📅 ЗАВТРА:</b>\n"
+        if tomorrow_broadcasts:
+            for broadcast in tomorrow_broadcasts:
+                # Determine emoji based on sport type
+                emoji = "🖥"
+                if broadcast['sport'] == "Football":
+                    emoji = "⚽"
+                elif broadcast['sport'] == "MMA":
+                    emoji = "🥊"
+                
+                # Escape HTML and limit length
+                safe_time = escape_html(broadcast['time'])
+                safe_event = escape_html(broadcast['event'])
+                
+                # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
+                message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
+                
+                # Add source information
+                source_name = broadcast.get('source', 'Unknown')
+                if source_name == "matchtv.ru":
+                    source_text = "MatchTV"
+                    source_link = "https://matchtv.ru/on-air"
+                else:
+                    source_text = source_name
+                    source_link = f"https://www.google.com/search?q={source_name}"
+                message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
+        else:
+            message_text += "<i>Трансляций не найдено</i>\n\n"
+        
+        return message_text
+    except Exception as e:
+        logger.error(f"Error formatting broadcast message: {e}")
+        # Return a simple message even if formatting fails
+        return f"🖥 Найдено {len(broadcasts)} трансляций. Подробности смотрите на сайте."
+
+# Test function
+        # Use cloudscraper to avoid being blocked by the website
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'darwin',
+                'mobile': False
+            }
+        )
+# Test function
+async def test_parser():
+    """Test the parser"""
+    print("Testing parser...")
+    
+    try:
+        broadcasts = await get_broadcasts_48h()
+        
+        if broadcasts:
+            print(f"\nFound {len(broadcasts)} unique broadcasts:")
+            for i, broadcast in enumerate(broadcasts[:10]):  # Show first 10
+                source = broadcast.get('source', 'Unknown')
+                print(f"  {i+1}. {broadcast['time']} - {broadcast['sport']} - {broadcast['event'][:50]}... (from {source})")
+        else:
+            print("No broadcasts found")
+            
+        # Test formatting
+        message = format_broadcast_message(broadcasts)
+        print(f"\nFormatted message preview (first 1000 chars):\n{message[:1000]}...")
+        
+    except Exception as e:
+        print(f"Error testing parser: {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    # Run the test
+    asyncio.run(test_parser())
+    
+def deduplicate_broadcasts(broadcasts):
+    """Remove duplicate broadcasts based on event name and time similarity"""
+    if not broadcasts:
+        return []
+    
+    # Use fuzzy matching to identify similar events
+    unique_broadcasts = []
+    processed_indices = set()
+    
+    for i, broadcast in enumerate(broadcasts):
+        if i in processed_indices:
+            continue
+            
+        # Check for similar broadcasts
+        similar_broadcasts = [broadcast]
+        
+        for j in range(i + 1, len(broadcasts)):
+            if j in processed_indices:
+                continue
+                
+            other_broadcast = broadcasts[j]
+            
+            # Check if times are close (less than 45 minutes apart)
+            try:
+                time1_parts = broadcast['time'].split(':')
+                time2_parts = other_broadcast['time'].split(':')
+                
+                if len(time1_parts) == 2 and len(time2_parts) == 2:
+                    hour1, minute1 = int(time1_parts[0]), int(time1_parts[1])
+                    hour2, minute2 = int(time2_parts[0]), int(time2_parts[1])
+                    
+                    # Convert to minutes for comparison
+                    total_minutes1 = hour1 * 60 + minute1
+                    total_minutes2 = hour2 * 60 + minute2
+                    
+                    # Handle day boundary (if needed)
+                    if abs(total_minutes1 - total_minutes2) > 45:
+                        # Check if it's a day boundary case (e.g., 23:50 and 00:10)
+                        if total_minutes1 > 23 * 60 and total_minutes2 < 1 * 60:
+                            # Adjust for day boundary
+                            total_minutes2 += 24 * 60
+                        elif total_minutes2 > 23 * 60 and total_minutes1 < 1 * 60:
+                            # Adjust for day boundary
+                            total_minutes1 += 24 * 60
+                            
+                    time_diff = abs(total_minutes1 - total_minutes2)
+                    
+                    # Check if events are similar (fuzzy ratio > 60%) and time difference < 45 minutes
+                    if time_diff < 45:
+                        similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
+                        if similarity > 60:
+                            similar_broadcasts.append(other_broadcast)
+                            processed_indices.add(j)
+            except Exception:
+                # If time parsing fails, skip time comparison but still check similarity
+                similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
+                if similarity > 60:
+                    similar_broadcasts.append(other_broadcast)
+                    processed_indices.add(j)
+        
+        # From similar broadcasts, keep the best one
+        # Preference: contains "Прямая" or longer text
+        best_broadcast = similar_broadcasts[0]
+        for similar in similar_broadcasts:
+            # If current best doesn't have "Прямая" but this one does, choose this one
+            if "Прямая" not in best_broadcast['event'] and "Прямая" in similar['event']:
+                best_broadcast = similar
+            # If both have "Прямая" or both don't, choose the longer one
+            elif len(similar['event']) > len(best_broadcast['event']):
+                best_broadcast = similar
+                
+        unique_broadcasts.append(best_broadcast)
+        processed_indices.add(i)
+    
+    # Sort by time
+    unique_broadcasts.sort(key=lambda x: x['time'])
+    return unique_broadcasts
+
 
 def format_broadcast_message(broadcasts):
     """Format broadcasts into a message string with proper emojis and without odds"""
