@@ -743,6 +743,15 @@ async def parse_championat_ucl_source(date_str=None) -> list:
         # Get current time for filtering
         current_time = get_current_time()
         
+        # Extract tournament stage information
+        tournament_stage = None
+        tournament_elem = soup.find('div', class_='seo-results__tournament')
+        if tournament_elem:
+            tournament_text = tournament_elem.get_text(strip=True)
+            if "Лига чемпионов" in tournament_text or "лига чемпионов" in tournament_text:
+                tournament_stage = clean_event_title(tournament_text)
+                logger.info(f"Found tournament stage: {tournament_stage}")
+        
         # Look for match links with UCL pattern
         # Find all links that contain /football/_ucl/ in href
         match_links = soup.find_all('a', href=re.compile(r'/football/_ucl/.*/match/\d+/'))
@@ -774,7 +783,13 @@ async def parse_championat_ucl_source(date_str=None) -> list:
                 # Apply extract_team_names for proper team name handling
                 home_team, away_team = extract_team_names(title)
                 if home_team and away_team:
-                    title = f"{home_team} - {away_team}"
+                    # First form the clean match name
+                    clean_match = f"{home_team} - {away_team}"
+                    # Then add tournament stage if found
+                    if tournament_stage:
+                        title = f"{tournament_stage}: {clean_match}"
+                    else:
+                        title = clean_match
                 
                 # Skip if title is empty or too short after cleaning
                 if not title or len(title) < 3:
@@ -817,6 +832,14 @@ def deduplicate_broadcasts(broadcasts):
     """Remove duplicate broadcasts based on event name and time similarity"""
     if not broadcasts:
         return []
+    
+    def _strip_tournament_prefix(event_name: str) -> str:
+        """Remove tournament prefix like 'Лига чемпионов. 1/4 финала: '"""
+        # Match pattern: anything followed by colon+space, then capture the rest
+        match = re.match(r'^[^:]+:\s*(.+)$', event_name)
+        if match:
+            return match.group(1).strip()
+        return event_name
     
     # Use fuzzy matching to identify similar events
     unique_broadcasts = []
@@ -862,13 +885,43 @@ def deduplicate_broadcasts(broadcasts):
                     
                     # Check if events are similar (fuzzy ratio > 60%) and time difference < 45 minutes
                     if time_diff < 45:
-                        similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
+                        # Strip tournament prefix before extracting team names
+                        clean_event1 = _strip_tournament_prefix(broadcast['event'])
+                        clean_event2 = _strip_tournament_prefix(other_broadcast['event'])
+                        home1, away1 = extract_team_names(clean_event1)
+                        home2, away2 = extract_team_names(clean_event2)
+                        
+                        # If teams are extracted, compare only team names
+                        if home1 and away1 and home2 and away2:
+                            # Form clean names for comparison
+                            clean_name1 = f"{home1} - {away1}".lower()
+                            clean_name2 = f"{home2} - {away2}".lower()
+                            similarity = fuzz.ratio(clean_name1, clean_name2)
+                        else:
+                            # Fallback: compare full names (as before)
+                            similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
+                            
                         if similarity > 60:
                             similar_broadcasts.append(other_broadcast)
                             processed_indices.add(j)
             except Exception:
                 # If time parsing fails, skip time comparison but still check similarity
-                similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
+                # Strip tournament prefix before extracting team names
+                clean_event1 = _strip_tournament_prefix(broadcast['event'])
+                clean_event2 = _strip_tournament_prefix(other_broadcast['event'])
+                home1, away1 = extract_team_names(clean_event1)
+                home2, away2 = extract_team_names(clean_event2)
+                
+                # If teams are extracted, compare only team names
+                if home1 and away1 and home2 and away2:
+                    # Form clean names for comparison
+                    clean_name1 = f"{home1} - {away1}".lower()
+                    clean_name2 = f"{home2} - {away2}".lower()
+                    similarity = fuzz.ratio(clean_name1, clean_name2)
+                else:
+                    # Fallback: compare full names (as before)
+                    similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
+                    
                 if similarity > 60:
                     similar_broadcasts.append(other_broadcast)
                     processed_indices.add(j)
@@ -1066,221 +1119,6 @@ def format_broadcast_message(broadcasts):
                 'mobile': False
             }
         )
-# Test function
-async def test_parser():
-    """Test the parser"""
-    print("Testing parser...")
-    
-    try:
-        broadcasts = await get_broadcasts_48h()
-        
-        if broadcasts:
-            print(f"\nFound {len(broadcasts)} unique broadcasts:")
-            for i, broadcast in enumerate(broadcasts[:10]):  # Show first 10
-                source = broadcast.get('source', 'Unknown')
-                print(f"  {i+1}. {broadcast['time']} - {broadcast['sport']} - {broadcast['event'][:50]}... (from {source})")
-        else:
-            print("No broadcasts found")
-            
-        # Test formatting
-        message = format_broadcast_message(broadcasts)
-        print(f"\nFormatted message preview (first 1000 chars):\n{message[:1000]}...")
-        
-    except Exception as e:
-        print(f"Error testing parser: {e}")
-        import traceback
-        traceback.print_exc()
-
-if __name__ == "__main__":
-    # Run the test
-    asyncio.run(test_parser())
-    
-def deduplicate_broadcasts(broadcasts):
-    """Remove duplicate broadcasts based on event name and time similarity"""
-    if not broadcasts:
-        return []
-    
-    # Use fuzzy matching to identify similar events
-    unique_broadcasts = []
-    processed_indices = set()
-    
-    for i, broadcast in enumerate(broadcasts):
-        if i in processed_indices:
-            continue
-            
-        # Check for similar broadcasts
-        similar_broadcasts = [broadcast]
-        
-        for j in range(i + 1, len(broadcasts)):
-            if j in processed_indices:
-                continue
-                
-            other_broadcast = broadcasts[j]
-            
-            # Check if times are close (less than 45 minutes apart)
-            try:
-                time1_parts = broadcast['time'].split(':')
-                time2_parts = other_broadcast['time'].split(':')
-                
-                if len(time1_parts) == 2 and len(time2_parts) == 2:
-                    hour1, minute1 = int(time1_parts[0]), int(time1_parts[1])
-                    hour2, minute2 = int(time2_parts[0]), int(time2_parts[1])
-                    
-                    # Convert to minutes for comparison
-                    total_minutes1 = hour1 * 60 + minute1
-                    total_minutes2 = hour2 * 60 + minute2
-                    
-                    # Handle day boundary (if needed)
-                    if abs(total_minutes1 - total_minutes2) > 45:
-                        # Check if it's a day boundary case (e.g., 23:50 and 00:10)
-                        if total_minutes1 > 23 * 60 and total_minutes2 < 1 * 60:
-                            # Adjust for day boundary
-                            total_minutes2 += 24 * 60
-                        elif total_minutes2 > 23 * 60 and total_minutes1 < 1 * 60:
-                            # Adjust for day boundary
-                            total_minutes1 += 24 * 60
-                            
-                    time_diff = abs(total_minutes1 - total_minutes2)
-                    
-                    # Check if events are similar (fuzzy ratio > 60%) and time difference < 45 minutes
-                    if time_diff < 45:
-                        similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
-                        if similarity > 60:
-                            similar_broadcasts.append(other_broadcast)
-                            processed_indices.add(j)
-            except Exception:
-                # If time parsing fails, skip time comparison but still check similarity
-                similarity = fuzz.ratio(broadcast['event'], other_broadcast['event'])
-                if similarity > 60:
-                    similar_broadcasts.append(other_broadcast)
-                    processed_indices.add(j)
-        
-        # From similar broadcasts, keep the best one
-        # Preference: contains "Прямая" or longer text
-        best_broadcast = similar_broadcasts[0]
-        for similar in similar_broadcasts:
-            # If current best doesn't have "Прямая" but this one does, choose this one
-            if "Прямая" not in best_broadcast['event'] and "Прямая" in similar['event']:
-                best_broadcast = similar
-            # If both have "Прямая" or both don't, choose the longer one
-            elif len(similar['event']) > len(best_broadcast['event']):
-                best_broadcast = similar
-                
-        unique_broadcasts.append(best_broadcast)
-        processed_indices.add(i)
-    
-    # Sort by time
-    unique_broadcasts.sort(key=lambda x: x['time'])
-    return unique_broadcasts
-
-
-def format_broadcast_message(broadcasts):
-    """Format broadcasts into a message string with proper emojis and without odds"""
-    if not broadcasts:
-        return "<b>Трансляций не найдено</b>"
-    
-    try:
-        # Simple HTML escape function
-        def escape_html(text):
-            if not text:
-                return ""
-            # Simple replacement for HTML escaping
-            text = text.replace('&', '&')
-            text = text.replace('<', '<')
-            text = text.replace('>', '>')
-            text = text.replace('"', '"')
-            text = text.replace("'", "'")
-            return text
-        
-        # Group broadcasts by date
-        today_broadcasts = []
-        tomorrow_broadcasts = []
-        
-        current_time = get_current_time()
-        today_str = current_time.strftime("%Y-%m-%d")
-        tomorrow_time = current_time + timedelta(days=1)
-        tomorrow_str = tomorrow_time.strftime("%Y-%m-%d")
-        
-        for broadcast in broadcasts:
-            # Clean the event title
-            broadcast['event'] = clean_event_title(broadcast['event'])
-            
-            # Group by date
-            broadcast_date = broadcast.get('date', today_str)
-            if broadcast_date == today_str:
-                today_broadcasts.append(broadcast)
-            elif broadcast_date == tomorrow_str:
-                tomorrow_broadcasts.append(broadcast)
-        
-        # Format message with separate sections for today and tomorrow
-        message_text = "🖥 <b>Расписание прямых трансляций на ближайшие сутки:</b>\n\n"
-        
-        # Today's broadcasts
-        message_text += "<b>📅 СЕГОДНЯ:</b>\n"
-        if today_broadcasts:
-            for broadcast in today_broadcasts:
-                # Determine emoji based on sport type
-                emoji = "🖥"
-                if broadcast['sport'] == "Football":
-                    emoji = "⚽"
-                elif broadcast['sport'] == "MMA":
-                    emoji = "🥊"
-                
-                # Escape HTML and limit length
-                safe_time = escape_html(broadcast['time'])
-                safe_event = escape_html(broadcast['event'])
-                
-                # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
-                message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
-                
-                # Add source information
-                source_name = broadcast.get('source', 'Unknown')
-                if source_name == "matchtv.ru":
-                    source_text = "MatchTV"
-                    source_link = "https://matchtv.ru/on-air"
-                else:
-                    source_text = source_name
-                    source_link = f"https://www.google.com/search?q={source_name}"
-                message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
-        else:
-            message_text += "<i>Трансляций не найдено</i>\n\n"
-        
-        # Tomorrow's broadcasts
-        message_text += "<b>📅 ЗАВТРА:</b>\n"
-        if tomorrow_broadcasts:
-            for broadcast in tomorrow_broadcasts:
-                # Determine emoji based on sport type
-                emoji = "🖥"
-                if broadcast['sport'] == "Football":
-                    emoji = "⚽"
-                elif broadcast['sport'] == "MMA":
-                    emoji = "🥊"
-                
-                # Escape HTML and limit length
-                safe_time = escape_html(broadcast['time'])
-                safe_event = escape_html(broadcast['event'])
-                
-                # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
-                message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
-                
-                # Add source information
-                source_name = broadcast.get('source', 'Unknown')
-                if source_name == "matchtv.ru":
-                    source_text = "MatchTV"
-                    source_link = "https://matchtv.ru/on-air"
-                else:
-                    source_text = source_name
-                    source_link = f"https://www.google.com/search?q={source_name}"
-                message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
-        else:
-            message_text += "<i>Трансляций не найдено</i>\n\n"
-        
-        return message_text
-    except Exception as e:
-        logger.error(f"Error formatting broadcast message: {e}")
-        # Return a simple message even if formatting fails
-        return f"🖥 Найдено {len(broadcasts)} трансляций. Подробности смотрите на сайте."
-
 # Test function
 async def test_parser():
     """Test the parser"""
