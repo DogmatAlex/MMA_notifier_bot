@@ -1,211 +1,321 @@
 import logging
 import re
-import cloudscraper
 import asyncio
-from bs4 import BeautifulSoup
+import aiohttp
 from datetime import timedelta
 from parser import (
     clean_event_title, extract_team_names, get_current_time,
     is_future_event, deduplicate_broadcasts,
     parse_matchtv_source, parse_fight_source, logger
 )
+from config import ODDS_API_KEY
 
 # Configure logging
 odds_logger = logging.getLogger('odds_parser')
 
 # Keywords to exclude for cyberfootball
-EXCLUDE_KEYWORDS = ["кибер", "cyber", "esports", "virtual", "fifa", "pes", "e-football"]
+EXCLUDE_KEYWORDS = ["кибер", "cyber", "esports", "virtual", "fifa", "pes", "e-football", "pes"]
 
-async def parse_betcity_live():
+# For testing purposes
+TESTING = False
+
+async def parse_betcity_api():
     """
-    Parse live football matches with odds from betcity.ru
+    Parse live football matches with odds from Betcity API
     Returns: list of broadcasts with odds
     """
-    try:
-        # Use cloudscraper to avoid being blocked by the website
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'darwin',
-                'mobile': False
+    # Mock data for testing
+    if TESTING:
+        odds_logger.info("Using mock data for testing")
+        return [
+            {
+                "time": "22:00",
+                "sport": "Football",
+                "event": "Англия. Премьер-лига: Арсенал - Манчестер Сити",
+                "odds": "📊 П1: 2.10 | Х: 3.40 | П2: 3.20",
+                "odds_source": "betcity.ru",
+                "link": "https://betcity.ru/ru/live/event/123456"
+            },
+            {
+                "time": "LIVE",
+                "sport": "Football",
+                "event": "Испания. Ла Лига: Барселона - Реал Мадрид",
+                "odds": "📊 П1: 1.80 | Х: 3.60 | П2: 4.20",
+                "odds_source": "betcity.ru",
+                "link": "https://betcity.ru/ru/live/event/123457"
             }
-        )
-        
-        # Use headers to avoid being blocked by the website
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Cache-Control': 'max-age=0'
-        }
-        
-        odds_logger.info("Attempting to fetch data from betcity.ru/live")
-        
-        # Fetch the live page with a timeout of 10 seconds
-        response = scraper.get("https://betcity.ru/ru/live", headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            odds_logger.warning(f"Failed to fetch https://betcity.ru/ru/live, status code: {response.status_code}")
-            return []
-        
-        # Debug: save first 2000 characters of response for analysis
-        sample = response.text[:2000].replace('\n', ' ')
-        odds_logger.info(f"DEBUG: Response preview: {sample}")
-        
-        # Check if "Фактический исход" exists in the response
-        if 'Фактический исход' not in response.text:
-            odds_logger.warning("WARNING: 'Фактический исход' not found in page source!")
-        
-        # Parse the HTML content
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        broadcasts = []
-        
-        # Get current time for filtering
-        current_time = get_current_time()
-        
-        # Find all blocks with "Фактический исход" (using fuzzy matching)
-        market_headers = soup.find_all('span', string=lambda text: text and 'Фактический исход' in text)
-        
-        odds_logger.info(f"Found {len(market_headers)} 'Фактический исход' blocks")
-        
-        for market_header in market_headers:
-            try:
-                # Find the parent match container
-                match_container = market_header.find_parent('div', class_=re.compile(r'match|event|row', re.I))
-                
-                if not match_container:
-                    continue
-                
-                # Extract tournament and team names
-                # Look for elements containing team names
-                team_elements = match_container.find_all(['div', 'span'], class_=re.compile(r'team|name|title', re.I))
-                
-                if len(team_elements) < 2:
-                    continue
-                
-                # Get the first two team elements as home and away teams
-                home_team_elem = team_elements[0]
-                away_team_elem = team_elements[1]
-                
-                home_team = home_team_elem.get_text(strip=True)
-                away_team = away_team_elem.get_text(strip=True)
-                
-                if not home_team or not away_team:
-                    continue
-                
-                # Create event title
-                event_title = f"{home_team} - {away_team}"
-                
-                # Check for exclude keywords (cyberfootball filter)
-                if any(kw in event_title.lower() for kw in EXCLUDE_KEYWORDS):
-                    odds_logger.info(f"Skipping cyberfootball match: {event_title}")
-                    continue
-                
-                # Extract tournament name if available
-                tournament_elem = match_container.find(['div', 'span'], class_=re.compile(r'tournament|league', re.I))
-                tournament_name = tournament_elem.get_text(strip=True) if tournament_elem else ""
-                
-                # Create full event name with tournament
-                if tournament_name:
-                    full_event = f"{tournament_name}: {event_title}"
-                else:
-                    full_event = event_title
-                
-                # Extract time (default to "LIVE" for live matches)
-                time_str = "LIVE"
-                
-                # Look for time elements
-                time_elem = match_container.find(['div', 'span'], class_=re.compile(r'time', re.I))
-                if time_elem:
-                    time_text = time_elem.get_text(strip=True)
-                    # If we find a time pattern, use it
-                    time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
-                    if time_match:
-                        time_str = time_match.group(1)
-                
-                # Extract odds
-                home_odds = None
-                draw_odds = None
-                away_odds = None
-                
-                # Find all outcome labels and odds buttons
-                outcomes = match_container.find_all('span', class_='dops-item-row__block-left')
-                odds_buttons = match_container.find_all('button', class_='dops-item-row__block-right')
-                
-                # Match outcomes with odds by index
-                for i, outcome in enumerate(outcomes):
-                    label = outcome.get_text(strip=True)
-                    if i < len(odds_buttons):
-                        odds_value = odds_buttons[i].get_text(strip=True)
-                        try:
-                            odds_float = float(odds_value.replace(',', '.'))
-                            if label == '1':
-                                home_odds = odds_float
-                            elif label.upper() == 'X':
-                                draw_odds = odds_float
-                            elif label == '2':
-                                away_odds = odds_float
-                        except ValueError:
-                            odds_logger.warning(f"Could not parse odds value: {odds_value}")
-                
-                # Skip if we don't have both home and away odds
-                if not home_odds or not away_odds:
-                    odds_logger.warning(f"Missing odds for match: {full_event}")
-                    continue
-                
-                # Format odds string
-                if draw_odds:
-                    odds_str = f"📊 П1: {home_odds} | Х: {draw_odds} | П2: {away_odds}"
-                else:
-                    odds_str = f"📊 П1: {home_odds} | П2: {away_odds}"
-                
-                # Create broadcast entry
-                broadcast = {
-                    "time": time_str,
-                    "sport": "Football",
-                    "event": full_event,
-                    "odds": odds_str,
-                    "odds_source": "betcity.ru",
-                    "link": "https://betcity.ru/ru/live"
-                }
-                
-                broadcasts.append(broadcast)
-                odds_logger.info(f"Found broadcast: {time_str} - Football - {full_event}")
-                
-            except Exception as e:
-                odds_logger.warning(f"Error processing match container: {e}")
-                continue
-        
-        odds_logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from betcity.ru")
-        return broadcasts
-            
-    except asyncio.TimeoutError:
-        odds_logger.warning("Timeout while fetching data from betcity.ru")
-        return []
-    except Exception as e:
-        odds_logger.error(f"Error parsing betcity.ru: {e}")
-        return []
-
-async def get_odds_broadcasts():
-    """Get broadcasts with odds from betcity.ru only"""
-    odds_logger.info("Starting odds broadcast fetching from betcity.ru only")
+        ]
     
     try:
-        # Get live matches from betcity.ru
-        live_broadcasts = await parse_betcity_live()
+        # Use aiohttp for async requests
+        async with aiohttp.ClientSession() as session:
+            # Betcity API endpoint
+            # TODO: уточнить актуальный Betcity API endpoint
+            url = "https://ad.betcity.ru/d/off/live?rev=3&ver=575&csn=o977aa"
+            
+            # Headers for API request
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                'Referer': 'https://betcity.ru/',
+                'Origin': 'https://betcity.ru',
+                'Accept': 'application/json',
+            }
+            
+            odds_logger.info("Attempting to fetch data from Betcity API")
+            
+            # Fetch data from Betcity API with a timeout of 7 seconds
+            async with session.get(url, headers=headers, timeout=7) as response:
+                if response.status != 200:
+                    odds_logger.warning(f"Failed to fetch Betcity API, status code: {response.status}")
+                    return []
+                
+                data = await response.json()
+                
+            broadcasts = []
+            
+            # Get current time for filtering
+            current_time = get_current_time()
+            
+            # Process events from API response
+            events = data.get('data', {}).get('events', [])
+            odds_logger.info(f"Found {len(events)} events in Betcity API response")
+            
+            for event in events:
+                try:
+                    # Only football events
+                    if event.get('sport_id') != 1 and event.get('sport_name') != 'Футбол':
+                        continue
+                    
+                    # Exclude cyberfootball
+                    league_name = event.get('league_name', '').lower()
+                    home_team = event.get('home_team', '').lower()
+                    if any(kw in league_name for kw in EXCLUDE_KEYWORDS) or any(kw in home_team for kw in EXCLUDE_KEYWORDS):
+                        odds_logger.info(f"Skipping cyberfootball match: {event.get('home_team')} - {event.get('away_team')}")
+                        continue
+                    
+                    # Extract teams
+                    home_team = event.get('home_team', '')
+                    away_team = event.get('away_team', '')
+                    
+                    if not home_team or not away_team:
+                        continue
+                    
+                    # Create event title
+                    event_title = f"{home_team} - {away_team}"
+                    
+                    # Extract tournament name
+                    tournament_name = event.get('league_name', '')
+                    
+                    # Create full event name with tournament
+                    if tournament_name:
+                        full_event = f"{tournament_name}: {event_title}"
+                    else:
+                        full_event = event_title
+                    
+                    # Extract time
+                    time_str = "LIVE"  # Default to LIVE for live matches
+                    
+                    # Try to get actual time if available
+                    event_time = event.get('time', 0)
+                    if event_time:
+                        # Convert timestamp to time string
+                        from datetime import datetime
+                        event_datetime = datetime.fromtimestamp(event_time)
+                        time_str = event_datetime.strftime("%H:%M")
+                    
+                    # Extract odds for "Фактический исход" (1X2 market)
+                    home_odds = None
+                    draw_odds = None
+                    away_odds = None
+                    
+                    # Look for main bets (Фактический исход)
+                    main_bets = event.get('main_bets', [])
+                    for bet in main_bets:
+                        # Check if this is the 1X2 market (usually outcome_type 1 or outcomes with type in [1,2,3])
+                        outcome_type = bet.get('outcome_type', 0)
+                        if outcome_type in [1, 2, 3]:  # 1 - П1, 2 - X, 3 - П2
+                            try:
+                                odds_value = float(bet.get('odds', 0))
+                                if outcome_type == 1:  # П1
+                                    home_odds = odds_value
+                                elif outcome_type == 2:  # X
+                                    draw_odds = odds_value
+                                elif outcome_type == 3:  # П2
+                                    away_odds = odds_value
+                            except (ValueError, TypeError):
+                                odds_logger.warning(f"Could not parse odds value for outcome type {outcome_type}")
+                    
+                    # If we didn't find odds in main_bets, try outcomes
+                    if not home_odds and not draw_odds and not away_odds:
+                        outcomes = event.get('outcomes', [])
+                        for outcome in outcomes:
+                            outcome_type = outcome.get('type', 0)
+                            if outcome_type in [1, 2, 3]:  # 1 - П1, 2 - X, 3 - П2
+                                try:
+                                    odds_value = float(outcome.get('odds', 0))
+                                    if outcome_type == 1:  # П1
+                                        home_odds = odds_value
+                                    elif outcome_type == 2:  # X
+                                        draw_odds = odds_value
+                                    elif outcome_type == 3:  # П2
+                                        away_odds = odds_value
+                                except (ValueError, TypeError):
+                                    odds_logger.warning(f"Could not parse odds value for outcome type {outcome_type}")
+                    
+                    # Skip if we don't have both home and away odds
+                    if not home_odds or not away_odds:
+                        odds_logger.warning(f"Missing odds for match: {full_event}")
+                        continue
+                    
+                    # Format odds string
+                    if draw_odds:
+                        odds_str = f"П1: {home_odds:.2f} | Х: {draw_odds:.2f} | П2: {away_odds:.2f}"
+                    else:
+                        odds_str = f"П1: {home_odds:.2f} | П2: {away_odds:.2f}"
+                    
+                    # Create match link
+                    match_id = event.get('id', '')
+                    if match_id:
+                        link = f"https://betcity.ru/ru/live/event/{match_id}"
+                    else:
+                        link = "https://betcity.ru/ru/live"
+                    
+                    # Create broadcast entry
+                    broadcast = {
+                        "time": time_str,
+                        "sport": "Football",
+                        "event": full_event,
+                        "odds": f"📊 {odds_str}",
+                        "odds_source": "betcity.ru",
+                        "link": link
+                    }
+                    
+                    broadcasts.append(broadcast)
+                    odds_logger.info(f"Found broadcast: {time_str} - Football - {full_event}")
+                    
+                except Exception as e:
+                    odds_logger.warning(f"Error processing event: {e}")
+                    continue
+            
+            odds_logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from Betcity API")
+            return broadcasts
+            
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        odds_logger.warning(f"Betcity API unavailable: {e}")
+        return []
+    except Exception as e:
+        odds_logger.error(f"Error parsing Betcity API: {e}")
+        return []
+
+async def get_odds_from_the_odds_api(home_team, away_team):
+    """Get odds for a match from The Odds API"""
+    # If team names are None, don't even try to make the request
+    if not home_team or not away_team:
+        return None
         
-        # Filter out broadcasts without odds
-        broadcasts_with_odds = [b for b in live_broadcasts if 'odds' in b and b['odds']]
+    if not ODDS_API_KEY:
+        return None
+    
+    try:
+        # Make request to The Odds API
+        url = "https://api.the-odds-api.com/v4/sports/upcoming/odds"
+        params = {
+            'apiKey': ODDS_API_KEY,
+            'regions': 'eu',  # European odds
+            'markets': 'h2h',  # Head to head market
+            'oddsFormat': 'decimal'
+        }
         
-        odds_logger.info(f"Successfully got {len(broadcasts_with_odds)} broadcasts with odds from betcity.ru")
-        return broadcasts_with_odds
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=7) as response:
+                if response.status == 429:
+                    # Rate limit reached, just return None without logging
+                    return None
+                    
+                if response.status != 200:
+                    # API error, just return None without logging
+                    return None
+                    
+                data = await response.json()
+                
+                # Check if we have data
+                if not data:
+                    return None
+                    
+                # Search for matching events
+                best_match_score = 0
+                best_odds = None
+                
+                for event in data:
+                    event_home_team = event.get('home_team', '').lower()
+                    event_away_team = event.get('away_team', '').lower()
+                    
+                    # Calculate similarity scores
+                    from fuzzywuzzy import fuzz
+                    home_score = max(
+                        fuzz.ratio(home_team.lower(), event_home_team),
+                        fuzz.ratio(home_team.lower(), event_away_team)
+                    )
+                    away_score = max(
+                        fuzz.ratio(away_team.lower(), event_home_team),
+                        fuzz.ratio(away_team.lower(), event_away_team)
+                    )
+                    
+                    # Average score
+                    avg_score = (home_score + away_score) / 2
+                    
+                    # If this is a better match
+                    if avg_score > best_match_score and avg_score > 70:  # Threshold for good match
+                        best_match_score = avg_score
+                        
+                        # Get the first bookmaker's odds
+                        bookmakers = event.get('bookmakers', [])
+                        if bookmakers:
+                            # Get the first market (h2h)
+                            markets = bookmakers[0].get('markets', [])
+                            if markets:
+                                outcomes = markets[0].get('outcomes', [])
+                                if len(outcomes) >= 2:
+                                    # Format odds string
+                                    home_price = outcomes[0].get('price', 'N/A')
+                                    away_price = outcomes[1].get('price', 'N/A')
+                                    
+                                    # Handle draw if it exists
+                                    if len(outcomes) > 2:
+                                        draw_price = outcomes[2].get('price', 'N/A')
+                                        best_odds = f"📊 П1: {home_price} | Х: {draw_price} | П2: {away_price}"
+                                    else:
+                                        best_odds = f"📊 П1: {home_price} | П2: {away_price}"
+                
+                return best_odds
+                
+    except Exception as e:
+        odds_logger.error(f"Error getting odds for {home_team} vs {away_team}: {e}")
+        return None
+
+async def get_odds_broadcasts():
+    """Get broadcasts with odds from Betcity API with fallback to The Odds API"""
+    odds_logger.info("Starting odds broadcast fetching with Betcity API as primary source")
+    
+    try:
+        # Try to get live matches from Betcity API
+        live_broadcasts = await parse_betcity_api()
+        
+        # If Betcity API returned data, use it
+        if live_broadcasts:
+            odds_logger.info(f"Successfully got {len(live_broadcasts)} broadcasts from Betcity API")
+            return live_broadcasts
+        
+        # If Betcity API failed or returned no data, try fallback to The Odds API
+        odds_logger.info("Betcity API returned no data, trying fallback to The Odds API")
+        
+        # For fallback, we would need to get events from some source
+        # Since we don't have access to the original source of events for The Odds API,
+        # we'll return empty list for now
+        # In a real implementation, we would get events from another source and then
+        # try to match them with The Odds API
+        
+        return []
         
     except Exception as e:
         odds_logger.error(f"Error in get_odds_broadcasts: {e}")
@@ -269,18 +379,17 @@ def format_odds_message(broadcasts):
                 
                 # Escape HTML and limit length
                 safe_time = escape_html(broadcast['time'])
+                safe_event = escape_html(broadcast['event'])
                 safe_teams = escape_html(teams_text)
                 
                 # Format as requested
-                message_text += f"⏰ {safe_time} | {emoji} <b>Football</b>: {safe_teams}\n"
+                message_text += f"⏰ {safe_time} | {emoji} <b>Football</b>: {safe_event}\n"
                 message_text += "Фактический исход:\n"
                 
                 # Add odds
                 if 'odds' in broadcast and broadcast['odds']:
                     safe_odds = escape_html(broadcast['odds'])
-                    # Extract just the odds part (remove "📊 ")
-                    odds_text = safe_odds.replace("📊 ", "")
-                    message_text += f"📊 {odds_text} 📡 <small>betcity.ru</small>\n\n"
+                    message_text += f"{safe_odds} 📡 <small>{broadcast['odds_source']}</small>\n\n"
                 else:
                     # Show message when odds are not available
                     message_text += "⚠️ Коэффициенты временно недоступны\n\n"
