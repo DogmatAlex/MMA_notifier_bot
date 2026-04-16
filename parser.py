@@ -456,6 +456,11 @@ async def parse_fight_source(date_str=None):
                 # Find all links that contain /football/_ucl/ in href
                 match_links = soup.find_all('a', href=re.compile(r'/football/_ucl/.*/match/\d+/'))
                 
+                # Debug: print the hrefs to see what we're getting
+                logger.info("Debug: Found UCL match link hrefs:")
+                for i, link in enumerate(match_links):
+                    logger.info(f"  {i+1}. {link.get('href', 'No href')}")
+                
                 logger.info(f"Found {len(match_links)} potential UCL matches")
                 
                 for link in match_links:
@@ -776,6 +781,13 @@ async def parse_championat_ucl_source(date_str=None) -> list:
                 # Skip if title is empty
                 if not title:
                     continue
+                
+                # === ФИЛЬТР ЮНОШЕСКИХ/ЖЕНСКИХ ТУРНИРОВ (ПЕРЕД ОЧИСТКОЙ!) ===
+                exclude_keywords = ["u19", "u17", "u15", "юношеск", "молодёж", "женск", "women", "youth", "junior"]
+                if any(kw in title.lower() for kw in exclude_keywords):
+                    logger.info(f"Skipping youth/women match (raw): {title}")
+                    continue
+                # === КОНЕЦ ФИЛЬТРА ===
                 
                 # Clean the title
                 title = clean_event_title(title)
