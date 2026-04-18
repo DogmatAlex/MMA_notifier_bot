@@ -49,9 +49,9 @@ async def parse_betcity_api():
     try:
         # Use aiohttp for async requests
         async with aiohttp.ClientSession() as session:
-            # Betcity API endpoint
-            # TODO: уточнить актуальный Betcity API endpoint
-            url = "https://ad.betcity.ru/d/off/live?rev=3&ver=575&csn=o977aa"
+            # Betcity API endpoints
+            events_url = "https://ad.betcity.ru/d/on_air/events?rev=5&ver=69&csn=ooca9s"
+            bets_url = "https://ad.betcity.ru/d/on_air/bets?rev=8&add=dep_event&ver=69&csn=ooca9s"
             
             # Headers for API request
             headers = {
@@ -61,140 +61,156 @@ async def parse_betcity_api():
                 'Accept': 'application/json',
             }
             
-            odds_logger.info("Attempting to fetch data from Betcity API")
+            odds_logger.info("Attempting to fetch data from Betcity Events API")
             
-            # Fetch data from Betcity API with a timeout of 7 seconds
-            async with session.get(url, headers=headers, timeout=7) as response:
+            # Fetch events data from Betcity API with a timeout of 7 seconds
+            async with session.get(events_url, headers=headers, timeout=7) as response:
                 if response.status != 200:
-                    odds_logger.warning(f"Failed to fetch Betcity API, status code: {response.status}")
+                    odds_logger.warning(f"Failed to fetch Betcity Events API, status code: {response.status}")
                     return []
                 
-                data = await response.json()
+                events_data = await response.json()
+                
+            odds_logger.info("Attempting to fetch data from Betcity Bets API")
+            
+            # Fetch bets data from Betcity API with a timeout of 7 seconds
+            async with session.get(bets_url, headers=headers, timeout=7) as response:
+                if response.status != 200:
+                    odds_logger.warning(f"Failed to fetch Betcity Bets API, status code: {response.status}")
+                    return []
+                
+                bets_data = await response.json()
                 
             broadcasts = []
             
-            # Get current time for filtering
-            current_time = get_current_time()
+            # Process sports from Events API response
+            sports = events_data.get('reply', {}).get('sports', {})
+            odds_logger.info(f"Found {len(sports)} sports in Betcity Events API response")
             
-            # Process events from API response
-            events = data.get('data', {}).get('events', [])
-            odds_logger.info(f"Found {len(events)} events in Betcity API response")
+            # Create a lookup for bets data by event_id
+            bets_lookup = {}
+            bets_sports = bets_data.get('reply', {}).get('sports', {})
+            for sport_id, sport_data in bets_sports.items():
+                chmps = sport_data.get('chmps', {})
+                for chmp_id, chmp_data in chmps.items():
+                    evts = chmp_data.get('evts', {})
+                    for event_id, event_bets_data in evts.items():
+                        bets_lookup[event_id] = event_bets_data
             
-            for event in events:
+            for sport_id, sport_data in sports.items():
                 try:
-                    # Only football events
-                    if event.get('sport_id') != 1 and event.get('sport_name') != 'Футбол':
+                    # Only football events (sport_id = "1" as string)
+                    if sport_id != "1":
                         continue
                     
-                    # Exclude cyberfootball
-                    league_name = event.get('league_name', '').lower()
-                    home_team = event.get('home_team', '').lower()
-                    if any(kw in league_name for kw in EXCLUDE_KEYWORDS) or any(kw in home_team for kw in EXCLUDE_KEYWORDS):
-                        odds_logger.info(f"Skipping cyberfootball match: {event.get('home_team')} - {event.get('away_team')}")
-                        continue
+                    sport_name = sport_data.get('name_sp', '')
+                    chmps = sport_data.get('chmps', {})
                     
-                    # Extract teams
-                    home_team = event.get('home_team', '')
-                    away_team = event.get('away_team', '')
-                    
-                    if not home_team or not away_team:
-                        continue
-                    
-                    # Create event title
-                    event_title = f"{home_team} - {away_team}"
-                    
-                    # Extract tournament name
-                    tournament_name = event.get('league_name', '')
-                    
-                    # Create full event name with tournament
-                    if tournament_name:
-                        full_event = f"{tournament_name}: {event_title}"
-                    else:
-                        full_event = event_title
-                    
-                    # Extract time
-                    time_str = "LIVE"  # Default to LIVE for live matches
-                    
-                    # Try to get actual time if available
-                    event_time = event.get('time', 0)
-                    if event_time:
-                        # Convert timestamp to time string
-                        from datetime import datetime
-                        event_datetime = datetime.fromtimestamp(event_time)
-                        time_str = event_datetime.strftime("%H:%M")
-                    
-                    # Extract odds for "Фактический исход" (1X2 market)
-                    home_odds = None
-                    draw_odds = None
-                    away_odds = None
-                    
-                    # Look for main bets (Фактический исход)
-                    main_bets = event.get('main_bets', [])
-                    for bet in main_bets:
-                        # Check if this is the 1X2 market (usually outcome_type 1 or outcomes with type in [1,2,3])
-                        outcome_type = bet.get('outcome_type', 0)
-                        if outcome_type in [1, 2, 3]:  # 1 - П1, 2 - X, 3 - П2
+                    for chmp_id, chmp_data in chmps.items():
+                        # Exclude cyberfootball
+                        is_cyber = chmp_data.get('is_cyber', 0)
+                        if is_cyber == 1:
+                            continue
+                        
+                        league_name = chmp_data.get('name_ch', '')
+                        # Additional check for cyberfootball keywords
+                        if any(kw in league_name.lower() for kw in EXCLUDE_KEYWORDS):
+                            continue
+                        
+                        evts = chmp_data.get('evts', {})
+                        for event_id, event in evts.items():
                             try:
-                                odds_value = float(bet.get('odds', 0))
-                                if outcome_type == 1:  # П1
-                                    home_odds = odds_value
-                                elif outcome_type == 2:  # X
-                                    draw_odds = odds_value
-                                elif outcome_type == 3:  # П2
-                                    away_odds = odds_value
-                            except (ValueError, TypeError):
-                                odds_logger.warning(f"Could not parse odds value for outcome type {outcome_type}")
-                    
-                    # If we didn't find odds in main_bets, try outcomes
-                    if not home_odds and not draw_odds and not away_odds:
-                        outcomes = event.get('outcomes', [])
-                        for outcome in outcomes:
-                            outcome_type = outcome.get('type', 0)
-                            if outcome_type in [1, 2, 3]:  # 1 - П1, 2 - X, 3 - П2
+                                # Exclude esports
+                                is_esports = event.get('is_esports', 0)
+                                if is_esports == 1:
+                                    continue
+                                
+                                # Extract teams
+                                home_team = event.get('name_ht', '')
+                                away_team = event.get('name_at', '')
+                                
+                                if not home_team or not away_team:
+                                    continue
+                                
+                                # Create event title
+                                event_title = f"{home_team} - {away_team}"
+                                
+                                # Create full event name with tournament
+                                full_event = f"{league_name}: {event_title}"
+                                
+                                # Extract time
+                                is_online = event.get('is_online', 0)
+                                time_str = "LIVE" if is_online == 1 else "UPCOMING"
+                                
+                                # Extract odds for "Фактический исход" (1X2 market)
+                                home_odds = None
+                                draw_odds = None
+                                away_odds = None
+                                
+                                # Look for odds data for this event
+                                event_bets_data = bets_lookup.get(event_id, {})
+                                
+                                # Check if we have odds data for this event
+                                if event_bets_data:
+                                    # Look for the "Wm" block which contains the "Фактический исход" market
+                                    # The structure is: event_bets_data -> "main" -> "69" -> "data" -> event_id -> "blocks" -> "Wm" -> {P1, X, P2} -> "kf"
+                                    main_market = event_bets_data.get('main', {})
+                                    fact_outcome_market = main_market.get('69', {})  # 69 is "Фактический исход"
+                                    market_data = fact_outcome_market.get('data', {})
+                                    event_data = market_data.get(event_id, {})
+                                    blocks = event_data.get('blocks', {})
+                                    wm_block = blocks.get('Wm', {})
+                                    
+                                    if wm_block:
+                                        # Extract odds for each outcome
+                                        p1_data = wm_block.get('P1', {})
+                                        x_data = wm_block.get('X', {})
+                                        p2_data = wm_block.get('P2', {})
+                                        
+                                        # Get the odds values (kf = коэффициент)
+                                        home_odds = p1_data.get('kf')
+                                        draw_odds = x_data.get('kf')
+                                        away_odds = p2_data.get('kf')
+                                
+                                # Skip if we don't have odds
+                                if home_odds is None or draw_odds is None or away_odds is None:
+                                    odds_logger.warning(f"Missing odds for match: {full_event}")
+                                    continue
+                                
+                                # Validate that odds are numbers
                                 try:
-                                    odds_value = float(outcome.get('odds', 0))
-                                    if outcome_type == 1:  # П1
-                                        home_odds = odds_value
-                                    elif outcome_type == 2:  # X
-                                        draw_odds = odds_value
-                                    elif outcome_type == 3:  # П2
-                                        away_odds = odds_value
+                                    home_odds = float(home_odds)
+                                    draw_odds = float(draw_odds)
+                                    away_odds = float(away_odds)
                                 except (ValueError, TypeError):
-                                    odds_logger.warning(f"Could not parse odds value for outcome type {outcome_type}")
-                    
-                    # Skip if we don't have both home and away odds
-                    if not home_odds or not away_odds:
-                        odds_logger.warning(f"Missing odds for match: {full_event}")
-                        continue
-                    
-                    # Format odds string
-                    if draw_odds:
-                        odds_str = f"П1: {home_odds:.2f} | Х: {draw_odds:.2f} | П2: {away_odds:.2f}"
-                    else:
-                        odds_str = f"П1: {home_odds:.2f} | П2: {away_odds:.2f}"
-                    
-                    # Create match link
-                    match_id = event.get('id', '')
-                    if match_id:
-                        link = f"https://betcity.ru/ru/live/event/{match_id}"
-                    else:
-                        link = "https://betcity.ru/ru/live"
-                    
-                    # Create broadcast entry
-                    broadcast = {
-                        "time": time_str,
-                        "sport": "Football",
-                        "event": full_event,
-                        "odds": f"📊 {odds_str}",
-                        "odds_source": "betcity.ru",
-                        "link": link
-                    }
-                    
-                    broadcasts.append(broadcast)
-                    odds_logger.info(f"Found broadcast: {time_str} - Football - {full_event}")
+                                    odds_logger.warning(f"Invalid odds values for match: {full_event}")
+                                    continue
+                                
+                                # Format odds string
+                                odds_str = f"П1: {home_odds:.2f} | Х: {draw_odds:.2f} | П2: {away_odds:.2f}"
+                                
+                                # Create match link
+                                link = f"https://betcity.ru/ru/live/event/{event_id}"
+                                
+                                # Create broadcast entry
+                                broadcast = {
+                                    "time": time_str,
+                                    "sport": "Football",
+                                    "event": full_event,
+                                    "odds": f"📊 {odds_str}",
+                                    "odds_source": "betcity.ru",
+                                    "link": link
+                                }
+                                
+                                broadcasts.append(broadcast)
+                                odds_logger.info(f"Found broadcast: {time_str} - Football - {full_event}")
+                                
+                            except Exception as e:
+                                odds_logger.warning(f"Error processing event {event_id}: {e}")
+                                continue
                     
                 except Exception as e:
-                    odds_logger.warning(f"Error processing event: {e}")
+                    odds_logger.warning(f"Error processing sport {sport_id}: {e}")
                     continue
             
             odds_logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from Betcity API")
@@ -345,6 +361,10 @@ def format_odds_message(broadcasts):
         if not broadcasts_with_odds:
             return "📊 <b>Коэффициентов не найдено</b>"
         
+        # Limit the number of broadcasts to display (to prevent exceeding 4096 characters)
+        MAX_ODDS_DISPLAY = 20
+        broadcasts_with_odds = broadcasts_with_odds[:MAX_ODDS_DISPLAY]
+        
         # Group broadcasts by date (for live, we'll put them all under TODAY)
         today_broadcasts = []
         tomorrow_broadcasts = []
@@ -386,10 +406,10 @@ def format_odds_message(broadcasts):
                 message_text += f"⏰ {safe_time} | {emoji} <b>Football</b>: {safe_event}\n"
                 message_text += "Фактический исход:\n"
                 
-                # Add odds
+                # Add odds - FIXED HTML TAGS FOR TELEGRAM COMPATIBILITY
                 if 'odds' in broadcast and broadcast['odds']:
                     safe_odds = escape_html(broadcast['odds'])
-                    message_text += f"{safe_odds} 📡 <small>{broadcast['odds_source']}</small>\n\n"
+                    message_text += f"{safe_odds} 📡 <i>{broadcast['odds_source']}</i>\n\n"
                 else:
                     # Show message when odds are not available
                     message_text += "⚠️ Коэффициенты временно недоступны\n\n"
