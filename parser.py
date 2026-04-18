@@ -1055,7 +1055,7 @@ def format_broadcast_message(broadcasts):
                 tomorrow_broadcasts.append(broadcast)
         
         # Format message with separate sections for today and tomorrow
-        message_text = "🖥 <b>Расписание прямых трансляций на ближайшие сутки:</b>\n\n"
+        message_text = "🖥 <b>Расписание трансляций на ближайшие сутки:</b>\n\n"
         
         # Today's broadcasts
         message_text += "<b>📅 СЕГОДНЯ:</b>\n"
