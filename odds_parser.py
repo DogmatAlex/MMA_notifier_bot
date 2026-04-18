@@ -409,7 +409,8 @@ def format_odds_message(broadcasts):
                 # Add odds - FIXED HTML TAGS FOR TELEGRAM COMPATIBILITY
                 if 'odds' in broadcast and broadcast['odds']:
                     safe_odds = escape_html(broadcast['odds'])
-                    message_text += f"{safe_odds} 📡 <i>{broadcast['odds_source']}</i>\n\n"
+                    message_text += f"{safe_odds}\n"  
+                    message_text += f"📡 <i>Источник: {broadcast['odds_source']}</i>\n\n"  
                 else:
                     # Show message when odds are not available
                     message_text += "⚠️ Коэффициенты временно недоступны\n\n"
