@@ -378,7 +378,7 @@ def format_odds_message(broadcasts):
         today_broadcasts = broadcasts_with_odds
         
         # Format message with separate sections for today and tomorrow
-        message_text = "📊 <b>Коэффициенты на ближайшие сутки:</b>\n\n"
+        message_text = "📊 <b>Коэффициенты на текущие матчи:</b>\n\n"
         
         # Today's broadcasts
         message_text += "📅 <b>СЕГОДНЯ:</b>\n"
