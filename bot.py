@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import json  # ← Добавили для работы с JSON
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import Command
@@ -20,18 +21,42 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize bot and dispatcher
-session = AiohttpSession(timeout=60)  # Increase timeout to 60 seconds
+session = AiohttpSession(timeout=60)
 bot = Bot(token=TELEGRAM_BOT, session=session)
 dp = Dispatcher()
 router = Router()
 
-# Store chat IDs for daily notifications
-chat_ids = set()
+# === НОВОЕ: Сохранение подписчиков в файл ===
+SUBSCRIBERS_FILE = "subscribers.json"
+
+def load_subscribers():
+    """Load chat IDs from JSON file"""
+    if os.path.exists(SUBSCRIBERS_FILE):
+        try:
+            with open(SUBSCRIBERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return set(data.get("chat_ids", []))
+        except Exception as e:
+            logger.warning(f"Could not load subscribers: {e}")
+    return set()
+
+def save_subscribers(chat_ids_set):
+    """Save chat IDs to JSON file"""
+    try:
+        with open(SUBSCRIBERS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"chat_ids": list(chat_ids_set)}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Could not save subscribers: {e}")
+
+# Initialize chat_ids from file
+chat_ids = load_subscribers()
+# === КОНЕЦ НОВОГО БЛОКА ===
 
 @router.message(Command(commands=["start"]))
 async def command_start_handler(message: Message) -> None:
     """Handle /start command"""
     chat_ids.add(message.chat.id)
+    save_subscribers(chat_ids)  # ← Сохраняем сразу после добавления
     
     welcome_text = (
         "👋 Добро пожаловать в бот уведомлений о спортивных трансляциях!\n\n"
@@ -48,6 +73,7 @@ async def command_start_handler(message: Message) -> None:
 async def command_odds_handler(message: Message) -> None:
     """Handle /odds command - show only odds for bettors"""
     chat_ids.add(message.chat.id)
+    save_subscribers(chat_ids)  # ← Сохраняем сразу после добавления
     
     # Send typing action to show the bot is working
     await bot.send_chat_action(message.chat.id, "typing")
@@ -70,6 +96,7 @@ async def command_odds_handler(message: Message) -> None:
 async def command_today_handler(message: Message) -> None:
     """Handle /today command"""
     chat_ids.add(message.chat.id)
+    save_subscribers(chat_ids)  # ← Сохраняем сразу после добавления
     
     # Send typing action to show the bot is working
     await bot.send_chat_action(message.chat.id, "typing")
@@ -101,6 +128,7 @@ async def send_daily():
         for cid in chat_ids:
             try:
                 await bot.send_message(cid, text, parse_mode="HTML")
+                logger.info(f"Sent daily notification to chat {cid}")
             except Exception as e:
                 logger.error(f"Error sending daily message to chat {cid}: {e}")
     except Exception as e:
@@ -115,6 +143,8 @@ async def main():
     scheduler = AsyncIOScheduler()
     scheduler.add_job(send_daily, CronTrigger(hour=9, minute=0, timezone='Europe/Moscow'))
     scheduler.start()
+    
+    logger.info(f"Bot started. Loaded {len(chat_ids)} subscribers from {SUBSCRIBERS_FILE}")
     
     # Start polling
     await dp.start_polling(bot)
