@@ -65,9 +65,6 @@ async def parse_betcity_api():
             # Extract UFC championship IDs
             ufc_champ_ids = []
             
-            # Keywords to exclude for women's MMA (only full words, not partial matches like "(ж)")
-            exclude_women = ["женщины", "women", "female"]
-            
             try:
                 sports = mma_champs_data.get('reply', {}).get('sports', {})
                 
@@ -80,9 +77,6 @@ async def parse_betcity_api():
                         # Filter for UFC only
                         champ_name = chmp_data.get('name_ch', '')
                         if champ_name.startswith("Смешанные боевые искусства. UFC."):
-                            # Exclude women's championships
-                            if any(kw in champ_name.lower() for kw in exclude_women):
-                                continue
                             # Exclude cyber sports
                             if chmp_data.get('is_cyber') == 1:
                                 continue
