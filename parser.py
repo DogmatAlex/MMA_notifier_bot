@@ -854,6 +854,31 @@ def deduplicate_broadcasts(broadcasts):
             return match.group(1).strip()
         return event_name
     
+    def _score_broadcast(broadcast):
+        """Score a broadcast based on quality criteria"""
+        score = 0
+        event_text = broadcast['event']
+        text_lower = event_text.lower()
+        
+        # Приоритет 1: содержит "Прямая трансляция" или "Прямая"
+        if "прямая" in text_lower:
+            score += 100
+        
+        # Приоритет 2: extract_team_names() вернул валидные команды
+        home, away = extract_team_names(event_text)
+        if home and away and len(home) > 2 and len(away) > 2:
+            score += 50
+            # Дополнительно: чем короче название после извлечения команд — тем лучше
+            clean_name = f"{home} - {away}"
+            if len(clean_name) < len(event_text):
+                score += 20  # предпочитаем более "чистые" названия
+        
+        # Приоритет 3: меньше мусорных фраз
+        trash_count = sum(1 for kw in TRASH_KEYWORDS if kw.lower() in text_lower)
+        score -= trash_count * 5  # штраф за мусор
+        
+        return score
+    
     # Use fuzzy matching to identify similar events
     unique_broadcasts = []
     processed_indices = set()
@@ -939,16 +964,17 @@ def deduplicate_broadcasts(broadcasts):
                     similar_broadcasts.append(other_broadcast)
                     processed_indices.add(j)
         
-        # From similar broadcasts, keep the best one
-        # Preference: contains "Прямая" or longer text
+        # From similar broadcasts, keep the best one using the new scoring system
         best_broadcast = similar_broadcasts[0]
-        for similar in similar_broadcasts:
-            # If current best doesn't have "Прямая" but this one does, choose this one
-            if "Прямая" not in best_broadcast['event'] and "Прямая" in similar['event']:
+        best_score = _score_broadcast(best_broadcast)
+        
+        for similar in similar_broadcasts[1:]:
+            similar_score = _score_broadcast(similar)
+            # Добавить логирование для отладки
+            logger.debug(f"Comparing duplicates: '{best_broadcast['event']}' (score: {best_score}) vs '{similar['event']}' (score: {similar_score})")
+            if similar_score > best_score:
                 best_broadcast = similar
-            # If both have "Прямая" or both don't, choose the longer one
-            elif len(similar['event']) > len(best_broadcast['event']):
-                best_broadcast = similar
+                best_score = similar_score
                 
         unique_broadcasts.append(best_broadcast)
         processed_indices.add(i)
