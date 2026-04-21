@@ -86,6 +86,9 @@ async def parse_betcity_api():
                             # Exclude cyber sports
                             if chmp_data.get('is_cyber') == 1:
                                 continue
+                            # Exclude "Возможные поединки" (speculative matches)
+                            if "возможные поединки" in champ_name.lower():
+                                continue
                             
                             ufc_champ_ids.append(chmp_id)
             
@@ -127,6 +130,9 @@ async def parse_betcity_api():
                                 # Exclude cyber sports
                                 if chmp_data.get('is_cyber') == 1:
                                     continue
+                                # Exclude "Возможные поединки" (speculative matches) - safety check
+                                if "возможные поединки" in champ_name.lower():
+                                    continue
                                 
                                 evts = chmp_data.get('evts', {})
                                 for event_id, event in evts.items():
@@ -157,6 +163,10 @@ async def parse_betcity_api():
                                         # Create event title
                                         event_title = f"{home_fighter} - {away_fighter}"
                                         full_event = f"{champ_name}: {event_title}"
+                                        
+                                        # Exclude "Возможные поединки" (speculative matches) - safety check
+                                        if "возможные поединки" in full_event.lower():
+                                            continue
                                         
                                         # Extract odds for "Фактический исход" (1X2 market)
                                         home_odds = None
