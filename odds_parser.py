@@ -212,6 +212,7 @@ async def parse_betcity_api():
                                         # Create broadcast entry
                                         broadcast = {
                                             "time": time_str,
+                                            "date": date_ev_str.split(' ')[0],  # ← НОВОЕ: "2026-04-26"
                                             "sport": "MMA",
                                             "event": full_event,
                                             "odds": f"📊 {odds_str}",
@@ -391,6 +392,19 @@ def format_odds_message(broadcasts):
             text = text.replace("'", "'")
             return text
         
+        def format_date_russian(date_str):
+            """Преобразовать '2026-04-26' в '26 апреля'"""
+            if not date_str or ' ' in date_str:
+                return date_str
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                months = ["января", "февраля", "марта", "апреля", "мая", "июня",
+                          "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+                return f"{dt.day} {months[dt.month - 1]}"
+            except:
+                return date_str
+        
         # Filter broadcasts that have odds
         broadcasts_with_odds = [b for b in broadcasts if 'odds' in b and b['odds']]
         
@@ -398,7 +412,7 @@ def format_odds_message(broadcasts):
             return "📊 <b>Коэффициентов не найдено</b>"
         
         # Limit the number of broadcasts to display (to prevent exceeding 4096 characters)
-        MAX_ODDS_DISPLAY = 25
+        MAX_ODDS_DISPLAY = 40
         broadcasts_with_odds = broadcasts_with_odds[:MAX_ODDS_DISPLAY]
         
         # Group broadcasts by tournament
@@ -434,8 +448,14 @@ def format_odds_message(broadcasts):
             tournaments[tournament].append({
                 'fighters': fighters,
                 'odds': odds_str,
-                'odds_source': broadcast['odds_source']
+                'odds_source': broadcast['odds_source'],
+                'date': broadcast.get('date', '')  # Add date field
             })
+        
+        # Sort fights within each tournament by date (from nearest to latest)
+        for tournament in tournaments:
+            # Sort fights by date (convert "2026-04-26" to comparable format)
+            tournaments[tournament].sort(key=lambda x: x.get('date', '9999-99-99'))
         
         # Format message with tournament grouping
         message_text = "📊 <b>Коэффициенты ближайших боёв UFC</b>\n\n"
@@ -444,10 +464,20 @@ def format_odds_message(broadcasts):
             # Add tournament header
             message_text += f"🏆 {escape_html(tournament)}\n"
             
-            # Add fights
-            for fight in fights:
-                message_text += f"🥊 {escape_html(fight['fighters'])}\n"
-                message_text += f"📊 {escape_html(fight['odds'])}\n"
+            # Group fights by date (assuming fights are already sorted by date)
+            from itertools import groupby
+            for date, date_fights in groupby(fights, key=lambda x: x.get('date', '')):
+                date_list = list(date_fights)  # groupby returns an iterator, convert to list
+                
+                # Display date only if it exists and is not empty
+                if date:
+                    formatted_date = format_date_russian(date)
+                    message_text += f"{formatted_date}\n"  # without emoji
+                
+                # Display all fights for this date
+                for fight in date_list:
+                    message_text += f"🥊 {escape_html(fight['fighters'])}\n"
+                    message_text += f"📊 {escape_html(fight['odds'])}\n"
             
             # Add source at the end of tournament
             if fights:
