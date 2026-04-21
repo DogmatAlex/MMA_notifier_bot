@@ -21,7 +21,7 @@ TESTING = False
 
 async def parse_betcity_api():
     """
-    Parse live football matches with odds from Betcity API
+    Parse upcoming UFC fights with odds from Betcity Line section
     Returns: list of broadcasts with odds
     """
     # Mock data for testing
@@ -29,31 +29,21 @@ async def parse_betcity_api():
         odds_logger.info("Using mock data for testing")
         return [
             {
-                "time": "22:00",
-                "sport": "Football",
-                "event": "Англия. Премьер-лига: Арсенал - Манчестер Сити",
-                "odds": "📊 П1: 2.10 | Х: 3.40 | П2: 3.20",
+                "time": "05:00",
+                "sport": "MMA",
+                "event": "Смешанные боевые искусства. UFC. Алджамейн Стерлинг - Юссеф Залал.",
+                "odds": "📊 П1: 1.85 | П2: 4.10",
                 "odds_source": "betcity.ru",
-                "link": "https://betcity.ru/ru/live/event/123456"
-            },
-            {
-                "time": "LIVE",
-                "sport": "Football",
-                "event": "Испания. Ла Лига: Барселона - Реал Мадрид",
-                "odds": "📊 П1: 1.80 | Х: 3.60 | П2: 4.20",
-                "odds_source": "betcity.ru",
-                "link": "https://betcity.ru/ru/live/event/123457"
+                "link": "https://betcity.ru/ru/line/event/123456"
             }
         ]
     
     try:
         # Use aiohttp for async requests
         async with aiohttp.ClientSession() as session:
-            # Betcity API endpoints
-            events_url = "https://ad.betcity.ru/d/on_air/events?rev=5&ver=69&csn=ooca9s"
-            bets_url = "https://ad.betcity.ru/d/on_air/bets?rev=8&add=dep_event&ver=69&csn=ooca9s"
+            broadcasts = []
             
-            # Headers for API request
+            # Headers for API requests
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
                 'Referer': 'https://betcity.ru/',
@@ -61,166 +51,202 @@ async def parse_betcity_api():
                 'Accept': 'application/json',
             }
             
-            odds_logger.info("Attempting to fetch data from Betcity Events API")
+            # Step 1: Get list of championships
+            odds_logger.info("Parsing UFC championships from Betcity Line API")
+            mma_champs_url = "https://ad.betcity.ru/d/off/champs?rev=4&ids_sp=39&ver=69&csn=ooca9s"
             
-            # Fetch events data from Betcity API with a timeout of 7 seconds
-            async with session.get(events_url, headers=headers, timeout=7) as response:
+            async with session.get(mma_champs_url, headers=headers, timeout=7) as response:
                 if response.status != 200:
-                    odds_logger.warning(f"Failed to fetch Betcity Events API, status code: {response.status}")
+                    odds_logger.warning(f"Failed to fetch Betcity MMA Championships API, status code: {response.status}")
                     return []
                 
-                events_data = await response.json()
+                mma_champs_data = await response.json()
+            
+            # Extract UFC championship IDs
+            ufc_champ_ids = []
+            
+            # Keywords to exclude for women's MMA (only full words, not partial matches like "(ж)")
+            exclude_women = ["женщины", "women", "female"]
+            
+            try:
+                sports = mma_champs_data.get('reply', {}).get('sports', {})
                 
-            odds_logger.info("Attempting to fetch data from Betcity Bets API")
-            
-            # Fetch bets data from Betcity API with a timeout of 7 seconds
-            async with session.get(bets_url, headers=headers, timeout=7) as response:
-                if response.status != 200:
-                    odds_logger.warning(f"Failed to fetch Betcity Bets API, status code: {response.status}")
-                    return []
-                
-                bets_data = await response.json()
-                
-            broadcasts = []
-            
-            # Process sports from Events API response
-            sports = events_data.get('reply', {}).get('sports', {})
-            odds_logger.info(f"Found {len(sports)} sports in Betcity Events API response")
-            
-            # Create a lookup for bets data by event_id
-            bets_lookup = {}
-            bets_sports = bets_data.get('reply', {}).get('sports', {})
-            for sport_id, sport_data in bets_sports.items():
-                chmps = sport_data.get('chmps', {})
-                for chmp_id, chmp_data in chmps.items():
-                    evts = chmp_data.get('evts', {})
-                    for event_id, event_bets_data in evts.items():
-                        bets_lookup[event_id] = event_bets_data
-            
-            for sport_id, sport_data in sports.items():
-                try:
-                    # Only football events (sport_id = "1" as string)
-                    if sport_id != "1":
-                        continue
-                    
-                    sport_name = sport_data.get('name_sp', '')
-                    chmps = sport_data.get('chmps', {})
+                # MMA has sport_id = "39"
+                mma_data = sports.get("39", {})
+                if mma_data:
+                    chmps = mma_data.get('chmps', {})
                     
                     for chmp_id, chmp_data in chmps.items():
-                        # Exclude cyberfootball
-                        is_cyber = chmp_data.get('is_cyber', 0)
-                        if is_cyber == 1:
-                            continue
-                        
-                        league_name = chmp_data.get('name_ch', '')
-                        # Additional check for cyberfootball keywords
-                        if any(kw in league_name.lower() for kw in EXCLUDE_KEYWORDS):
-                            continue
-                        
-                        evts = chmp_data.get('evts', {})
-                        for event_id, event in evts.items():
-                            try:
-                                # Exclude esports
-                                is_esports = event.get('is_esports', 0)
-                                if is_esports == 1:
-                                    continue
-                                
-                                # Extract teams
-                                home_team = event.get('name_ht', '')
-                                away_team = event.get('name_at', '')
-                                
-                                if not home_team or not away_team:
-                                    continue
-                                
-                                # Create event title
-                                event_title = f"{home_team} - {away_team}"
-                                
-                                # Create full event name with tournament
-                                full_event = f"{league_name}: {event_title}"
-                                
-                                # Extract time
-                                is_online = event.get('is_online', 0)
-                                time_str = "LIVE" if is_online == 1 else "UPCOMING"
-                                
-                                # Extract odds for "Фактический исход" (1X2 market)
-                                home_odds = None
-                                draw_odds = None
-                                away_odds = None
-                                
-                                # Look for odds data for this event
-                                event_bets_data = bets_lookup.get(event_id, {})
-                                
-                                # Check if we have odds data for this event
-                                if event_bets_data:
-                                    # Look for the "Wm" block which contains the "Фактический исход" market
-                                    # The structure is: event_bets_data -> "main" -> "69" -> "data" -> event_id -> "blocks" -> "Wm" -> {P1, X, P2} -> "kf"
-                                    main_market = event_bets_data.get('main', {})
-                                    fact_outcome_market = main_market.get('69', {})  # 69 is "Фактический исход"
-                                    market_data = fact_outcome_market.get('data', {})
-                                    event_data = market_data.get(event_id, {})
-                                    blocks = event_data.get('blocks', {})
-                                    wm_block = blocks.get('Wm', {})
-                                    
-                                    if wm_block:
-                                        # Extract odds for each outcome
-                                        p1_data = wm_block.get('P1', {})
-                                        x_data = wm_block.get('X', {})
-                                        p2_data = wm_block.get('P2', {})
-                                        
-                                        # Get the odds values (kf = коэффициент)
-                                        home_odds = p1_data.get('kf')
-                                        draw_odds = x_data.get('kf')
-                                        away_odds = p2_data.get('kf')
-                                
-                                # Skip if we don't have odds
-                                if home_odds is None or draw_odds is None or away_odds is None:
-                                    odds_logger.warning(f"Missing odds for match: {full_event}")
-                                    continue
-                                
-                                # Validate that odds are numbers
-                                try:
-                                    home_odds = float(home_odds)
-                                    draw_odds = float(draw_odds)
-                                    away_odds = float(away_odds)
-                                except (ValueError, TypeError):
-                                    odds_logger.warning(f"Invalid odds values for match: {full_event}")
-                                    continue
-                                
-                                # Format odds string
-                                odds_str = f"П1: {home_odds:.2f} | Х: {draw_odds:.2f} | П2: {away_odds:.2f}"
-                                
-                                # Create match link
-                                link = f"https://betcity.ru/ru/live/event/{event_id}"
-                                
-                                # Create broadcast entry
-                                broadcast = {
-                                    "time": time_str,
-                                    "sport": "Football",
-                                    "event": full_event,
-                                    "odds": f"📊 {odds_str}",
-                                    "odds_source": "betcity.ru",
-                                    "link": link
-                                }
-                                
-                                broadcasts.append(broadcast)
-                                odds_logger.info(f"Found broadcast: {time_str} - Football - {full_event}")
-                                
-                            except Exception as e:
-                                odds_logger.warning(f"Error processing event {event_id}: {e}")
+                        # Filter for UFC only
+                        champ_name = chmp_data.get('name_ch', '')
+                        if champ_name.startswith("Смешанные боевые искусства. UFC."):
+                            # Exclude women's championships
+                            if any(kw in champ_name.lower() for kw in exclude_women):
                                 continue
+                            # Exclude cyber sports
+                            if chmp_data.get('is_cyber') == 1:
+                                continue
+                            
+                            ufc_champ_ids.append(chmp_id)
+            
+            except Exception as e:
+                odds_logger.error(f"Error parsing MMA championships: {type(e).__name__}: {e}", exc_info=True)
+                return []
+            
+            odds_logger.info(f"Found {len(ufc_champ_ids)} UFC championships to process")
+            
+            # Step 2: For each UFC championship, get the events
+            for champ_id in ufc_champ_ids:
+                try:
+                    mma_events_url = f"https://ad.betcity.ru/d/off/events?rev=6&ids_ch={champ_id}&ver=69&csn=ooca9s"
                     
+                    async with session.get(mma_events_url, headers=headers, timeout=7) as event_response:
+                        if event_response.status != 200:
+                            odds_logger.warning(f"Failed to fetch Betcity MMA Events API for champ {champ_id}, status code: {event_response.status}")
+                            continue
+                        
+                        mma_events_data = await event_response.json()
+                        
+                        # Parse events data
+                        try:
+                            sports = mma_events_data.get('reply', {}).get('sports', {})
+                            
+                            # MMA has sport_id = "39"
+                            mma_data = sports.get("39", {})
+                            if not mma_data:
+                                continue
+                                
+                            chmps = mma_data.get('chmps', {})
+                            
+                            for chmp_id, chmp_data in chmps.items():
+                                # Filter for UFC only
+                                champ_name = chmp_data.get('name_ch', '')
+                                if not champ_name.startswith("Смешанные боевые искусства. UFC."):
+                                    continue
+                                
+                                # Exclude cyber sports
+                                if chmp_data.get('is_cyber') == 1:
+                                    continue
+                                
+                                evts = chmp_data.get('evts', {})
+                                for event_id, event in evts.items():
+                                    try:
+                                        # Exclude cyber sports and esports
+                                        if event.get('is_cyber') == 1 or event.get('is_esports') == 1:
+                                            continue
+                                        
+                                        # Extract fighters
+                                        home_fighter = event.get('name_ht', '')
+                                        away_fighter = event.get('name_at', '')
+                                        
+                                        if not home_fighter or not away_fighter:
+                                            continue
+                                        
+                                        # Check if event is upcoming (not live)
+                                        if event.get('is_online') == 1:
+                                            continue  # Skip live events
+                                        
+                                        # Extract time
+                                        date_ev_str = event.get('date_ev_str', '')
+                                        if not date_ev_str:
+                                            continue
+                                        
+                                        # Extract time part from date_ev_str (e.g., "2026-04-29 05:00")
+                                        time_str = date_ev_str.split(' ')[1] if ' ' in date_ev_str else date_ev_str
+                                        
+                                        # Create event title
+                                        event_title = f"{home_fighter} - {away_fighter}"
+                                        full_event = f"{champ_name}: {event_title}"
+                                        
+                                        # Extract odds for "Фактический исход" (1X2 market)
+                                        home_odds = None
+                                        away_odds = None
+                                        
+                                        # Look for the "Wm" block which contains the "Фактический исход" market
+                                        # The structure is: event -> "main" -> "69" -> "data" -> event_id -> "blocks" -> "Wm" -> {P1, P2} -> "kf"
+                                        main_market = event.get('main', {})
+                                        fact_outcome_market = main_market.get('69', {})  # 69 is "Фактический исход"
+                                        market_data = fact_outcome_market.get('data', {})
+                                        event_data = market_data.get(event_id, {})
+                                        blocks = event_data.get('blocks', {})
+                                        wm_block = blocks.get('Wm', {})
+                                        
+                                        if wm_block:
+                                            # Extract odds for each outcome (MMA usually only has P1 and P2)
+                                            p1_data = wm_block.get('P1', {})
+                                            p2_data = wm_block.get('P2', {})
+                                            
+                                            # Get the odds values (kf = коэффициент)
+                                            home_odds = p1_data.get('kf')
+                                            away_odds = p2_data.get('kf')
+                                        
+                                        # Skip if we don't have odds
+                                        if home_odds is None or away_odds is None:
+                                            odds_logger.warning(f"Missing odds for MMA match: {full_event}")
+                                            continue
+                                        
+                                        # Validate that odds are numbers
+                                        try:
+                                            home_odds = float(home_odds)
+                                            away_odds = float(away_odds)
+                                        except (ValueError, TypeError):
+                                            odds_logger.warning(f"Invalid odds values for MMA match: {full_event}")
+                                            continue
+                                        
+                                        # Format odds string (MMA usually doesn't have draw/X)
+                                        odds_str = f"П1: {home_odds:.2f} | П2: {away_odds:.2f}"
+                                        
+                                        # Create match link
+                                        link = f"https://betcity.ru/ru/line/event/{event_id}"
+                                        
+                                        # Create broadcast entry
+                                        broadcast = {
+                                            "time": time_str,
+                                            "sport": "MMA",
+                                            "event": full_event,
+                                            "odds": f"📊 {odds_str}",
+                                            "odds_source": "betcity.ru",
+                                            "link": link
+                                        }
+                                        
+                                        broadcasts.append(broadcast)
+                                        odds_logger.info(f"Found MMA broadcast: {time_str} - {full_event}")
+                                        
+                                    except Exception as e:
+                                        odds_logger.warning(f"Error processing MMA event {event_id}: {e}")
+                                        continue
+                                
+                        except Exception as e:
+                            odds_logger.warning(f"Error parsing MMA events data for champ {champ_id}: {type(e).__name__}: {e}", exc_info=True)
+                            continue
+                        
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    odds_logger.warning(f"Betcity Line API unavailable for champ {champ_id}: {e}")
+                    continue
                 except Exception as e:
-                    odds_logger.warning(f"Error processing sport {sport_id}: {e}")
+                    odds_logger.error(f"Error processing champ {champ_id}: {type(e).__name__}: {e}", exc_info=True)
                     continue
             
-            odds_logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from Betcity API")
-            return broadcasts
+            # Deduplicate events based on (sport, event, time)
+            unique_broadcasts = []
+            seen = set()
+            
+            for broadcast in broadcasts:
+                # Create a unique key: (sport, event, time)
+                key = (broadcast['sport'], broadcast['event'], broadcast['time'])
+                if key not in seen:
+                    seen.add(key)
+                    unique_broadcasts.append(broadcast)
+            
+            odds_logger.info(f"Removed {len(broadcasts) - len(unique_broadcasts)} duplicate broadcasts")
+            odds_logger.info(f"Successfully parsed {len(unique_broadcasts)} unique broadcasts from Betcity Line API")
+            return unique_broadcasts
             
     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        odds_logger.warning(f"Betcity API unavailable: {e}")
+        odds_logger.warning(f"Betcity Line API unavailable: {e}")
         return []
     except Exception as e:
-        odds_logger.error(f"Error parsing Betcity API: {e}")
+        odds_logger.error(f"Error parsing Line: {type(e).__name__}: {e}", exc_info=True)
         return []
 
 async def get_odds_from_the_odds_api(home_team, away_team):
@@ -362,64 +388,60 @@ def format_odds_message(broadcasts):
             return "📊 <b>Коэффициентов не найдено</b>"
         
         # Limit the number of broadcasts to display (to prevent exceeding 4096 characters)
-        MAX_ODDS_DISPLAY = 20
+        MAX_ODDS_DISPLAY = 25
         broadcasts_with_odds = broadcasts_with_odds[:MAX_ODDS_DISPLAY]
         
-        # Group broadcasts by date (for live, we'll put them all under TODAY)
-        today_broadcasts = []
-        tomorrow_broadcasts = []
+        # Group broadcasts by tournament
+        tournaments = {}
+        for broadcast in broadcasts_with_odds:
+            # Clean the event title
+            broadcast['event'] = clean_event_title(broadcast['event'])
+            
+            # Extract tournament and fighters from event
+            if ':' in broadcast['event']:
+                tournament, fighters = broadcast['event'].split(':', 1)
+                tournament = tournament.strip()
+                fighters = fighters.strip()
+            else:
+                tournament = "UFC"
+                fighters = broadcast['event']
+            
+            if tournament not in tournaments:
+                tournaments[tournament] = []
+            
+            # Add fighters and odds to tournament
+            # Extract odds values from the existing odds string
+            odds_str = broadcast['odds'].replace('📊 ', '')  # Remove the emoji
+            
+            # For MMA, add draw odds (Х: 70.00) if not present
+            if 'Х:' not in odds_str:
+                # Parse existing odds (expecting format "П1: X.XX | П2: X.XX")
+                parts = odds_str.split(' | ')
+                if len(parts) == 2:
+                    # Add draw odds
+                    odds_str = f"{parts[0]} | Х: 70.00 | {parts[1]}"
+            
+            tournaments[tournament].append({
+                'fighters': fighters,
+                'odds': odds_str,
+                'odds_source': broadcast['odds_source']
+            })
         
-        current_time = get_current_time()
-        today_str = current_time.strftime("%Y-%m-%d")
-        tomorrow_time = current_time + timedelta(days=1)
-        tomorrow_str = tomorrow_time.strftime("%Y-%m-%d")
+        # Format message with tournament grouping
+        message_text = "📊 <b>Коэффициенты ближайших боёв UFC</b>\n\n"
         
-        # For live broadcasts, put them all under TODAY
-        today_broadcasts = broadcasts_with_odds
-        
-        # Format message with separate sections for today and tomorrow
-        message_text = "📊 <b>Коэффициенты на текущие матчи:</b>\n\n"
-        
-        # Today's broadcasts
-        message_text += "📅 <b>СЕГОДНЯ:</b>\n"
-        if today_broadcasts:
-            for broadcast in today_broadcasts:
-                # Clean the event title
-                broadcast['event'] = clean_event_title(broadcast['event'])
-                
-                # Determine emoji based on sport type
-                emoji = "⚽"
-                
-                # Extract clean team names
-                home_team, away_team = extract_team_names(broadcast['event'])
-                if home_team and away_team:
-                    teams_text = f"{home_team} - {away_team}"
-                else:
-                    teams_text = broadcast['event']
-                
-                # Escape HTML and limit length
-                safe_time = escape_html(broadcast['time'])
-                safe_event = escape_html(broadcast['event'])
-                safe_teams = escape_html(teams_text)
-                
-                # Format as requested
-                message_text += f"⏰ {safe_time} | {emoji} <b>Football</b>: {safe_event}\n"
-                message_text += "Фактический исход:\n"
-                
-                # Add odds - FIXED HTML TAGS FOR TELEGRAM COMPATIBILITY
-                if 'odds' in broadcast and broadcast['odds']:
-                    safe_odds = escape_html(broadcast['odds'])
-                    message_text += f"{safe_odds}\n"  
-                    message_text += f"📡 <i>Источник: {broadcast['odds_source']}</i>\n\n"  
-                else:
-                    # Show message when odds are not available
-                    message_text += "⚠️ Коэффициенты временно недоступны\n\n"
-        else:
-            message_text += "<i>Коэффициентов не найдено</i>\n\n"
-        
-        # Tomorrow's broadcasts (empty for live odds)
-        message_text += "📅 <b>ЗАВТРА:</b>\n"
-        message_text += "<i>Коэффициентов не найдено</i>\n\n"
+        for tournament, fights in tournaments.items():
+            # Add tournament header
+            message_text += f"🏆 {escape_html(tournament)}\n"
+            
+            # Add fights
+            for fight in fights:
+                message_text += f"🥊 {escape_html(fight['fighters'])}\n"
+                message_text += f"📊 {escape_html(fight['odds'])}\n"
+            
+            # Add source at the end of tournament
+            if fights:
+                message_text += f"📡 <i>Источник: {escape_html(fights[0]['odds_source'])}</i>\n\n"
         
         return message_text
     except Exception as e:
