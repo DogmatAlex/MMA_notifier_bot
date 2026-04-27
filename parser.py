@@ -1099,7 +1099,13 @@ def format_broadcast_message(broadcasts):
                 safe_event = escape_html(broadcast['event'])
                 
                 # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
-                message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
+                event_line = f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}"
+
+                # Add ❗️ if it's a "Прямая трансляция"
+                if "прямая трансляция" in broadcast['event'].lower() or "прямая" in broadcast['event'].lower():
+                    event_line += " ❗️"
+
+                message_text += event_line + "\n"
                 
                 # Add source information
                 source_name = broadcast.get('source', 'Unknown')
@@ -1129,7 +1135,13 @@ def format_broadcast_message(broadcasts):
                 safe_event = escape_html(broadcast['event'])
                 
                 # Format as requested: ⏰ 13:40 | ⚽️ Футбол: Крылья Советов - Ахмат
-                message_text += f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}\n"
+                event_line = f"⏰ {safe_time} | {emoji} <b>{broadcast['sport']}</b>: {safe_event}"
+
+                # Add ❗️ if it's a "Прямая трансляция"
+                if "прямая трансляция" in broadcast['event'].lower() or "прямая" in broadcast['event'].lower():
+                    event_line += " ❗️"
+
+                message_text += event_line + "\n"
                 
                 # Add source information
                 source_name = broadcast.get('source', 'Unknown')
