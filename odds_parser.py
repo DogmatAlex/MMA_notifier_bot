@@ -24,6 +24,15 @@ async def parse_betcity_api():
     Parse upcoming UFC fights with odds from Betcity Line section
     Returns: list of broadcasts with odds
     """
+    # Import cache functions
+    from cache import load_from_cache, save_to_cache
+    
+    # Check cache first
+    cached = load_from_cache("betcity_odds", "current")
+    if cached:
+        odds_logger.info("Using cached data for Betcity API")
+        return cached
+    
     # Mock data for testing
     if TESTING:
         odds_logger.info("Using mock data for testing")
@@ -52,7 +61,7 @@ async def parse_betcity_api():
             }
             
             # Step 1: Get list of championships
-            odds_logger.info("Parsing UFC championships from Betcity Line API")
+            odds_logger.info("Fetching odds from Betcity API")
             mma_champs_url = "https://ad.betcity.ru/d/off/champs?rev=4&ids_sp=39&ver=69&csn=ooca9s"
             
             async with session.get(mma_champs_url, headers=headers, timeout=7) as response:
@@ -245,13 +254,28 @@ async def parse_betcity_api():
             
             odds_logger.info(f"Removed {len(broadcasts) - len(unique_broadcasts)} duplicate broadcasts")
             odds_logger.info(f"Successfully parsed {len(unique_broadcasts)} unique broadcasts from Betcity Line API")
+            
+            # Save to cache if we have data
+            if unique_broadcasts:
+                save_to_cache("betcity_odds", "current", unique_broadcasts)
+            
             return unique_broadcasts
             
     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         odds_logger.warning(f"Betcity Line API unavailable: {e}")
+        # Try to return cached data if available
+        cached = load_from_cache("betcity_odds", "current")
+        if cached:
+            odds_logger.info("Returning cached data for Betcity API due to API unavailability")
+            return cached
         return []
     except Exception as e:
         odds_logger.error(f"Error parsing Line: {type(e).__name__}: {e}", exc_info=True)
+        # Try to return cached data if available
+        cached = load_from_cache("betcity_odds", "current")
+        if cached:
+            odds_logger.info("Returning cached data for Betcity API due to error")
+            return cached
         return []
 
 async def get_odds_from_the_odds_api(home_team, away_team):
