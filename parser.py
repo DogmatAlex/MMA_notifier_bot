@@ -396,6 +396,15 @@ async def parse_fight_source(date_str=None):
     """Parse sports broadcasts from fight.ru"""
     logger.info(f"Attempting to fetch data from fight.ru for date {date_str or 'today'}")
     
+    # Import cache functions
+    from cache import load_from_cache, save_to_cache
+    
+    # Try to load from cache first
+    cached = load_from_cache("fight", date_str or "today")
+    if cached:
+        logger.info(f"Using cached data for fight.ru ({date_str or 'today'})")
+        return cached
+    
     try:
         # Use cloudscraper to avoid being blocked by the website
         scraper = cloudscraper.create_scraper(
@@ -612,6 +621,11 @@ async def parse_fight_source(date_str=None):
         broadcasts.sort(key=lambda x: x['time'])
         
         logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from fight.ru")
+        
+        # Save to cache if we have broadcasts
+        if broadcasts:
+            save_to_cache("fight", date_str or "today", broadcasts)
+        
         return broadcasts
             
     except Exception as e:
@@ -717,6 +731,15 @@ async def parse_championat_ucl_source(date_str=None) -> list:
     Returns: list of broadcasts in standard format
     """
     logger.info(f"Attempting to fetch Champions League data from championat.com for date {date_str or 'today'}")
+    
+    # Import cache functions
+    from cache import load_from_cache, save_to_cache
+    
+    # Try to load from cache first
+    cached = load_from_cache("championat_ucl", date_str or "today")
+    if cached:
+        logger.info(f"Using cached data for championat.com ({date_str or 'today'})")
+        return cached
     
     try:
         # Use cloudscraper to avoid being blocked by the website
@@ -849,6 +872,11 @@ async def parse_championat_ucl_source(date_str=None) -> list:
         broadcasts.sort(key=lambda x: x['time'])
         
         logger.info(f"Successfully parsed {len(broadcasts)} UCL broadcasts from championat.com")
+        
+        # Save to cache if we have broadcasts
+        if broadcasts:
+            save_to_cache("championat_ucl", date_str or "today", broadcasts)
+        
         return broadcasts
             
     except Exception as e:
