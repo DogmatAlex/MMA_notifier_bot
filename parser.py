@@ -25,7 +25,7 @@ MMA_KEYWORDS = [
 # Stop words that indicate non-sports events
 STOP_WORDS = [
     'плавание', 'баскетбол', 'волейбол', 'хоккей', 'теннис', 'биатлон',
-    'лыжи', 'боулинг', 'кубок мира', 'гарри поттер', 'обзор', 'новости',
+    'лыжи', 'боулинг', 'кубок мира', 'советский футбол', 'обзор', 'новости',
     'интервью', 'итоги', 'репортаж', 'дневник', 'фильм', 'синхронное плавание',
     'после футбола', 'черданцев', 'георгий', 'обзор тура', 'главные новости',
     'лучшие моменты', 'топ-10', 'фото', 'видео голов', 'человек из футбола',
@@ -393,16 +393,16 @@ async def parse_matchtv_source(date_str=None):
         return []
 
 async def parse_fight_source(date_str=None):
-    """Parse sports broadcasts from fight.ru"""
-    logger.info(f"Attempting to fetch data from fight.ru for date {date_str or 'today'}")
+    """Parse upcoming MMA events from fight.ru/schedule/"""
+    logger.info("Attempting to fetch upcoming MMA events from fight.ru/schedule/")
     
     # Import cache functions
     from cache import load_from_cache, save_to_cache
     
     # Try to load from cache first
-    cached = load_from_cache("fight", date_str or "today")
+    cached = load_from_cache("fight_schedule", "upcoming")
     if cached:
-        logger.info(f"Using cached data for fight.ru ({date_str or 'today'})")
+        logger.info("Using cached data for fight.ru schedule (upcoming)")
         return cached
     
     try:
@@ -429,299 +429,106 @@ async def parse_fight_source(date_str=None):
             'Cache-Control': 'max-age=0'
         }
         
-        if date_str:
-            url = f"https://fight.ru/tv/?date={date_str}"
-        else:
-            url = "https://fight.ru/tv/"
+        # New URL for upcoming events
+        url = "https://fight.ru/schedule/"
         logger.info(f"Trying to fetch {url}")
         
         response = scraper.get(url, headers=headers, timeout=15)
         
-        logger.info(f"fight.ru returned status code: {response.status_code}")
+        logger.info(f"fight.ru/schedule/ returned status code: {response.status_code}")
         
         if response.status_code != 200:
             logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
-            # Try the translations URL as an alternative
-            try:
-                translations_url = "https://fight.ru/translations/" if not date_str else f"https://fight.ru/translations/?date={date_str}"
-                logger.info(f"Trying to fetch translations URL {translations_url}")
-                translations_response = scraper.get(translations_url, headers=headers, timeout=15)
-                if translations_response.status_code == 200:
-                    response = translations_response
-                    logger.info(f"Successfully fetched translations URL")
-                else:
-                    logger.warning(f"Failed to fetch translations URL, status code: {translations_response.status_code}")
-                    return []
-            except Exception as e:
-                logger.warning(f"Error fetching translations URL: {e}")
-                return []
-                # Try to get the schedule page
-                if date_str:
-                    url = f"https://www.championat.com/stat/football/#date={date_str}"
-                else:
-                    url = "https://www.championat.com/stat/football/"
-                    
-                logger.info(f"Fetching data from {url}")
-                response = scraper.get(url, headers=headers, timeout=10)
-                
-                if response.status_code != 200:
-                    logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
-                    return []
-                
-                # Parse the HTML content
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                broadcasts = []
-                
-                # Get current time for filtering
-                current_time = get_current_time()
-                
-                # Look for match links with UCL pattern
-                # Find all links that contain /football/_ucl/ in href
-                match_links = soup.find_all('a', href=re.compile(r'/football/_ucl/.*/match/\d+/'))
-                
-                # Debug: print the hrefs to see what we're getting
-                logger.info("Debug: Found UCL match link hrefs:")
-                for i, link in enumerate(match_links):
-                    logger.info(f"  {i+1}. {link.get('href', 'No href')}")
-                
-                logger.info(f"Found {len(match_links)} potential UCL matches")
-                
-                for link in match_links:
-                    try:
-                        # Extract time from span with class seo-results__item-date
-                        time_elem = link.find_previous('span', class_='seo-results__item-date')
-                        time_str = "N/A"
-                        if time_elem:
-                            time_text = time_elem.get_text(strip=True)
-                            # Extract time in format HH:MM
-                            time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
-                            if time_match:
-                                time_str = time_match.group(1)
-                        
-                        # Extract match title from link text
-                        title = link.get_text(strip=True)
-                        
-                        # Skip if title is empty
-                        if not title:
-                            continue
-                        
-                        # Clean the title
-                        title = clean_event_title(title)
-                        
-                        # Apply extract_team_names for proper team name handling
-                        home_team, away_team = extract_team_names(title)
-                        if home_team and away_team:
-                            title = f"{home_team} - {away_team}"
-                        
-                        # Skip if title is empty or too short after cleaning
-                        if not title or len(title) < 3:
-                            continue
-                        
-                        # Create full URL
-                        match_url = "https://www.championat.com" + link['href'] if link.get('href', '').startswith('/') else link['href']
-                        
-                        # Check if event is in the future
-                        if is_future_event(time_str, date_str, current_time):
-                            broadcast = {
-                                "time": time_str,
-                                "sport": "Football",
-                                "event": title,
-                                "link": match_url,
-                                "source": "championat.com"
-                            }
-                            broadcasts.append(broadcast)
-                            logger.info(f"Found UCL broadcast: {time_str} - Football - {title[:50]}...")
-                            
-                            # Limit to prevent too many matches
-                            if len(broadcasts) >= 20:
-                                break
-                                
-                    except Exception as e:
-                        logger.warning(f"Error processing championat.com match link: {e}")
-                        continue
-                
-                # Sort by time
-                broadcasts.sort(key=lambda x: x['time'])
-                
-                logger.info(f"Successfully parsed {len(broadcasts)} UCL broadcasts from championat.com")
-                return broadcasts
-                    
-            except Exception as e:
-                logger.error(f"Error parsing championat.com: {e}")
-                return []
-            
+            return []
+        
+        # Parse the HTML content
         soup = BeautifulSoup(response.text, 'html.parser')
         broadcasts = []
         
-        # Get current time for filtering
-        current_time = get_current_time()
+        # Look for event items with correct CSS selectors
+        event_items = soup.find_all('div', class_='fights-item position-relative')
         
-        # Look for TV schedule items
-        schedule_items = soup.find_all('div', class_=re.compile(r'event|match|broadcast', re.I))
+        logger.info(f"Found {len(event_items)} event items on fight.ru/schedule/")
         
-        if not schedule_items:
-            # Try alternative selectors
-            schedule_items = soup.find_all('div', class_=re.compile(r'item|row', re.I))
+        # Get current date for filtering
+        current_date = datetime.now().date()
         
-        logger.info(f"Found {len(schedule_items)} schedule items on fight.ru")
-        
-        for item in schedule_items:
+        for item in event_items:
             try:
-                # Extract time
-                time_elem = item.find(['time', 'div'], class_=re.compile(r'time', re.I))
+                # Date
+                date_elem = item.find('span', class_='date fw-bold')
+                date_str = date_elem.get_text(strip=True) if date_elem else ""
+                
+                # Time (extract only time from "01:00 МСК")
+                time_elem = item.find('span', class_='time text-nowrap')
                 time_str = "N/A"
                 if time_elem:
                     time_text = time_elem.get_text(strip=True)
-                    # Extract time in format HH:MM
                     time_match = re.search(r'(\d{1,2}:\d{2})', time_text)
                     if time_match:
                         time_str = time_match.group(1)
                 
-                # Extract title
-                title_elem = item.find(['h3', 'div'], class_=re.compile(r'title|name|event', re.I))
-                if not title_elem:
-                    title_elem = item.find('a')
+                # Tournament name
+                title_elem = item.find('a', class_='fw-bold h6')
+                title = title_elem.get_text(strip=True) if title_elem else ""
+                if not title:
+                    continue  # skip if no title
                 
-                title = ""
+                # Location (next span after link)
+                location = ""
                 if title_elem:
-                    title = title_elem.get_text(strip=True)
+                    location_elem = title_elem.find_next('span')
+                    if location_elem:
+                        location = location_elem.get_text(strip=True)
                 
-                # Clean the title
-                title = clean_event_title(title)
+                # Format event
+                event_text = title
+                if location:
+                    event_text = f"{title}\n📍 {location}"
                 
-                # Skip if title is empty or too short
-                if not title or len(title) < 3:
+                # Convert date from DD.MM.YYYY to YYYY-MM-DD for sorting
+                formatted_date = None
+                event_date = None
+                if date_str:
+                    try:
+                        date_obj = datetime.strptime(date_str, "%d.%m.%Y")
+                        formatted_date = date_obj.strftime("%Y-%m-%d")
+                        event_date = date_obj.date()
+                    except ValueError:
+                        pass
+                
+                # Skip events in the past
+                if event_date and event_date < current_date:
                     continue
                 
-                # Focus only on MMA events for fight.ru
-                mma_keywords = ["ufc", "mma", "бой", "юфс", "аса", "bellator", "fight night", "прохазка", "единоборства", "бокс"]
-                lower_title = title.lower()
-                if any(keyword in lower_title for keyword in mma_keywords):
-                    # Check if event is in the future
-                    if is_future_event(time_str, date_str, current_time):
-                        # Determine sport type
-                        sport_type = determine_sport_type(title)
-                        
-                        broadcast = {
-                            "time": time_str,
-                            "sport": sport_type,
-                            "event": title,
-                            "link": "https://fight.ru/tv/" if not date_str else f"https://fight.ru/tv/?date={date_str}",
-                            "source": "fight.ru"
-                        }
-                        broadcasts.append(broadcast)
-                        logger.info(f"Found broadcast: {time_str} - {sport_type} - {title[:50]}...")
-                        
+                broadcast = {
+                    "time": time_str,
+                    "sport": "MMA",
+                    "event": event_text,
+                    "link": "https://fight.ru" + title_elem['href'] if title_elem and title_elem.get('href') else "https://fight.ru/schedule/",
+                    "source": "fight.ru",
+                    "date": formatted_date,
+                    "location": location
+                }
+                broadcasts.append(broadcast)
+                
             except Exception as e:
-                logger.warning(f"Error processing fight.ru item: {e}")
+                logger.warning(f"Error parsing fight.ru event: {e}")
                 continue
         
-        # Sort by time
-        broadcasts.sort(key=lambda x: x['time'])
+        # Sort by date
+        broadcasts.sort(key=lambda x: x.get('date', '') or '')
         
-        logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from fight.ru")
+        logger.info(f"Successfully parsed {len(broadcasts)} upcoming events from fight.ru/schedule/")
         
         # Save to cache if we have broadcasts
         if broadcasts:
-            save_to_cache("fight", date_str or "today", broadcasts)
+            save_to_cache("fight_schedule", "upcoming", broadcasts)
         
         return broadcasts
             
     except Exception as e:
-        logger.error(f"Error parsing fight.ru: {e}")
-        # Try to parse main page if /tv/ page is not available
-        try:
-            # Use cloudscraper to avoid being blocked by the website
-            scraper = cloudscraper.create_scraper(
-                browser={
-                    'browser': 'chrome',
-                    'platform': 'darwin',
-                    'mobile': False
-                }
-            )
-            
-            # Use headers to avoid being blocked by the website
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Cache-Control': 'max-age=0'
-            }
-            
-            main_url = "https://fight.ru/"
-            logger.info(f"Trying to fetch main page {main_url}")
-            main_response = scraper.get(main_url, headers=headers, timeout=15)
-            if main_response.status_code == 200:
-                main_soup = BeautifulSoup(main_response.text, 'html.parser')
-                # Look for elements with "ТВ" or "Трансляция" in text or class names
-                tv_elements = main_soup.find_all(['div', 'a', 'span'],
-                                                string=re.compile(r'ТВ|Трансляц', re.I))
-                if not tv_elements:
-                    # Try to find elements with TV or broadcast related class names
-                    tv_elements = main_soup.find_all(['div', 'a', 'span'],
-                                                    class_=re.compile(r'tv|broadcast|live', re.I))
-                
-                logger.info(f"Found {len(tv_elements)} TV elements on main page")
-                main_broadcasts = []
-                current_time = get_current_time()
-                
-                for elem in tv_elements:
-                    try:
-                        # Get text content
-                        elem_text = elem.get_text(strip=True)
-                        if len(elem_text) < 10:  # Skip very short texts
-                            continue
-                            
-                        # Look for time pattern
-                        time_match = re.search(r'(\d{1,2}:\d{2})', elem_text)
-                        time_str = "N/A"
-                        if time_match:
-                            time_str = time_match.group(1)
-                        
-                        # Check if it contains MMA/boxing keywords
-                        lower_text = elem_text.lower()
-                        mma_keywords = ["ufc", "mma", "бой", "юфс", "аса", "bellator", "fight night", "единоборства", "бокс"]
-                        if any(keyword in lower_text for keyword in mma_keywords):
-                            # Clean title
-                            title = clean_event_title(elem_text)
-                            if title and len(title) >= 3:
-                                # Check if event is in the future
-                                if is_future_event(time_str, date_str, current_time):
-                                    # Determine sport type
-                                    sport_type = determine_sport_type(title)
-                                    
-                                    # Get link if available
-                                    link = "https://fight.ru/"
-                                    if elem.name == 'a' and elem.get('href'):
-                                        href = elem.get('href')
-                                        if href.startswith('http'):
-                                            link = href
-                                        elif href.startswith('/'):
-                                            link = f"https://fight.ru{href}"
-                                    
-                                    broadcast = {
-                                        "time": time_str,
-                                        "sport": sport_type,
-                                        "event": title,
-                                        "link": link,
-                                        "source": "fight.ru"
-                                    }
-                                    main_broadcasts.append(broadcast)
-                                    logger.info(f"Found broadcast on main page: {time_str} - {sport_type} - {title[:50]}...")
-                    except Exception as e:
-                        logger.warning(f"Error processing fight.ru main page element: {e}")
-                        continue
-                
-                return main_broadcasts
-        except Exception as e:
-            logger.warning(f"Error parsing fight.ru main page: {e}")
+        logger.error(f"Error parsing fight.ru/schedule/: {e}")
         return []
 
 async def parse_championat_ucl_source(date_str=None) -> list:
@@ -1196,6 +1003,26 @@ def format_broadcast_message(broadcasts):
                 message_text += f"📡 <b>Источник:</b> <a href='{source_link}'>{source_text}</a>\n\n"
         else:
             message_text += "<i>Трансляций не найдено</i>\n\n"
+        
+        # Add upcoming MMA events block
+        # Filter upcoming events (those with location field, which indicates they're from fight.ru schedule)
+        upcoming_events = [b for b in broadcasts if 'location' in b and b['location']]
+        if upcoming_events:
+            message_text += "🔮 <b>Предстоящие MMA события:</b>\n"
+            for event in upcoming_events:
+                # Format date
+                event_date = event.get('date', 'Дата не указана')
+                if event_date:
+                    message_text += f"🥊 {event_date} {event['time']} | {event['event'].split(chr(10))[0]}\n"
+                    # Add location if available
+                    if event['location']:
+                        message_text += f"📍 {event['location']}\n"
+                else:
+                    message_text += f"🥊 {event['time']} | {event['event'].split(chr(10))[0]}\n"
+                    # Add location if available
+                    if event['location']:
+                        message_text += f"📍 {event['location']}\n"
+                message_text += "📡 <i>Источник: fight.ru</i>\n\n"
         
         return message_text
     except Exception as e:
