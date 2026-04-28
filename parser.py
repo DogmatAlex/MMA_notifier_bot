@@ -481,10 +481,8 @@ async def parse_fight_source(date_str=None):
                     if location_elem:
                         location = location_elem.get_text(strip=True)
                 
-                # Format event
+                # Format event (without location - it will be added separately)
                 event_text = title
-                if location:
-                    event_text = f"{title}\n📍 {location}"
                 
                 # Convert date from DD.MM.YYYY to YYYY-MM-DD for sorting
                 formatted_date = None
@@ -494,12 +492,18 @@ async def parse_fight_source(date_str=None):
                         date_obj = datetime.strptime(date_str, "%d.%m.%Y")
                         formatted_date = date_obj.strftime("%Y-%m-%d")
                         event_date = date_obj.date()
+                        
+                        # Log the parsed date for debugging
+                        logger.info(f"Parsed event: date_str='{date_str}' → formatted='{formatted_date}' | title='{title[:50]}...'")
+                        
+                        # Filter events: only include events within 0-30 days from today
+                        max_date = current_date + timedelta(days=30)
+                        if event_date < current_date or event_date > max_date:
+                            logger.info(f"Skipping event outside 0-30 day range: {formatted_date} | {title[:50]}...")
+                            continue  # skip events outside the range
                     except ValueError:
+                        logger.warning(f"Could not parse date: {date_str}")
                         pass
-                
-                # Skip events in the past
-                if event_date and event_date < current_date:
-                    continue
                 
                 broadcast = {
                     "time": time_str,
@@ -922,7 +926,11 @@ def format_broadcast_message(broadcasts):
             # Clean the event title
             broadcast['event'] = clean_event_title(broadcast['event'])
             
-            # Group by date
+            # For events from fight.ru (they have a 'location' field) - don't add to today/tomorrow sections
+            if broadcast.get('source') == 'fight.ru':
+                continue  # these events will only go to the "Предстоящие события" section
+            
+            # Group by date for other sources
             broadcast_date = broadcast.get('date', today_str)
             if broadcast_date == today_str:
                 today_broadcasts.append(broadcast)
@@ -1012,13 +1020,15 @@ def format_broadcast_message(broadcasts):
             for event in upcoming_events:
                 # Format date
                 event_date = event.get('date', 'Дата не указана')
+                # Get clean event name (without any location that might be in the event text)
+                event_name = event['event'].split('\n')[0].strip()
                 if event_date:
-                    message_text += f"🥊 {event_date} {event['time']} | {event['event'].split(chr(10))[0]}\n"
+                    message_text += f"🥊 {event_date} {event['time']} | {event_name}\n"
                     # Add location if available
                     if event['location']:
                         message_text += f"📍 {event['location']}\n"
                 else:
-                    message_text += f"🥊 {event['time']} | {event['event'].split(chr(10))[0]}\n"
+                    message_text += f"🥊 {event['time']} | {event_name}\n"
                     # Add location if available
                     if event['location']:
                         message_text += f"📍 {event['location']}\n"
