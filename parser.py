@@ -445,10 +445,16 @@ async def parse_fight_source(date_str=None):
         soup = BeautifulSoup(response.text, 'html.parser')
         broadcasts = []
         
-        # Look for event items with correct CSS selectors
-        event_items = soup.find_all('div', class_='fights-item position-relative')
+        # Look for the upcoming tab (to avoid parsing past events)
+        upcoming_tab = soup.find('div', id='upcoming', class_=re.compile(r'active|upcoming-tab', re.I))
+        if not upcoming_tab:
+            logger.warning("Could not find upcoming tab on fight.ru/schedule/")
+            return []
         
-        logger.info(f"Found {len(event_items)} event items on fight.ru/schedule/")
+        # Look for event items with correct CSS selectors only within the upcoming tab
+        event_items = upcoming_tab.find_all('div', class_='fights-item position-relative')
+        
+        logger.info(f"Found {len(event_items)} event items on fight.ru/schedule/ (upcoming tab only)")
         
         # Get current date for filtering
         current_date = datetime.now().date()
@@ -496,10 +502,10 @@ async def parse_fight_source(date_str=None):
                         # Log the parsed date for debugging
                         logger.info(f"Parsed event: date_str='{date_str}' → formatted='{formatted_date}' | title='{title[:50]}...'")
                         
-                        # Filter events: only include events within 0-30 days from today
-                        max_date = current_date + timedelta(days=30)
+                        # Filter events: only include events within 0-90 days from today
+                        max_date = current_date + timedelta(days=90)
                         if event_date < current_date or event_date > max_date:
-                            logger.info(f"Skipping event outside 0-30 day range: {formatted_date} | {title[:50]}...")
+                            logger.info(f"Skipping event outside 0-90 day range: {formatted_date} | {title[:50]}...")
                             continue  # skip events outside the range
                     except ValueError:
                         logger.warning(f"Could not parse date: {date_str}")
@@ -511,7 +517,8 @@ async def parse_fight_source(date_str=None):
                     "event": event_text,
                     "link": "https://fight.ru" + title_elem['href'] if title_elem and title_elem.get('href') else "https://fight.ru/schedule/",
                     "source": "fight.ru",
-                    "date": formatted_date,
+                    "date_iso": formatted_date,      # YYYY-MM-DD for sorting/filtering
+                    "date_display": date_str,       # DD.MM.YYYY for display to user
                     "location": location
                 }
                 broadcasts.append(broadcast)
@@ -521,7 +528,7 @@ async def parse_fight_source(date_str=None):
                 continue
         
         # Sort by date
-        broadcasts.sort(key=lambda x: x.get('date', '') or '')
+        broadcasts.sort(key=lambda x: x.get('date_iso', '') or '')
         
         logger.info(f"Successfully parsed {len(broadcasts)} upcoming events from fight.ru/schedule/")
         
@@ -1022,8 +1029,10 @@ def format_broadcast_message(broadcasts):
                 event_date = event.get('date', 'Дата не указана')
                 # Get clean event name (without any location that might be in the event text)
                 event_name = event['event'].split('\n')[0].strip()
-                if event_date:
-                    message_text += f"🥊 {event_date} {event['time']} | {event_name}\n"
+                # Use date_display for fight.ru events (original format DD.MM.YYYY)
+                event_date_display = event.get('date_display', event.get('date_iso', event_date))
+                if event_date_display:
+                    message_text += f"🥊 {event_date_display} {event['time']} | {event_name}\n"
                     # Add location if available
                     if event['location']:
                         message_text += f"📍 {event['location']}\n"
