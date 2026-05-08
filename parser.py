@@ -937,11 +937,36 @@ def format_broadcast_message(broadcasts):
             if broadcast.get('source') == 'fight.ru':
                 continue  # these events will only go to the "Предстоящие события" section
             
-            # Group by date for other sources
-            broadcast_date = broadcast.get('date', today_str)
-            if broadcast_date == today_str:
+            # Group by actual calendar date for other sources
+            # Calculate the actual calendar date based on event time
+            api_date_str = broadcast.get('date', today_str)
+            event_time_str = broadcast.get('time', '00:00')
+            
+            # Try to calculate the actual calendar date
+            event_calendar_date = api_date_str  # fallback to API date
+            try:
+                if event_time_str != "N/A":
+                    # Parse the API date
+                    base_date = datetime.strptime(api_date_str, "%Y-%m-%d")
+                    # Parse the time
+                    hour, minute = map(int, event_time_str.split(':'))
+                    # Create datetime with the API date and event time
+                    event_datetime = base_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    # For early morning events (00:00-05:59), consider them part of the next calendar day
+                    if 0 <= hour <= 5:
+                        event_datetime += timedelta(days=1)
+                    # Get the actual calendar date as string
+                    event_calendar_date = event_datetime.strftime("%Y-%m-%d")
+                    logger.debug(f"Event '{broadcast['event'][:30]}...': API date={api_date_str}, time={event_time_str} → calendar date={event_calendar_date}")
+            except (ValueError, TypeError) as e:
+                # If parsing fails, use the API date as fallback
+                logger.debug(f"Could not parse date/time for event '{broadcast['event']}': {e}")
+                event_calendar_date = api_date_str
+            
+            # Group by the calculated calendar date
+            if event_calendar_date == today_str:
                 today_broadcasts.append(broadcast)
-            elif broadcast_date == tomorrow_str:
+            elif event_calendar_date == tomorrow_str:
                 tomorrow_broadcasts.append(broadcast)
         
         # Format message with separate sections for today and tomorrow
