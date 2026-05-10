@@ -41,6 +41,14 @@ TRASH_KEYWORDS = [
     'Переключай камеры', 'Завтра,', 'Сегодня,', '17 апр,', '18 апр,'
 ]
 
+# Channel names to ignore (not sports events)
+CHANNEL_NAMES_TO_IGNORE = [
+    'футбол 1', 'футбол 2', 'футбол 3',
+    'матч! футбол 1', 'матч! футбол 2', 'матч! футбол 3',
+    'боец', 'арена', 'игра', 'страна',
+    'матч! арена', 'матч! игра', 'матч! страна',
+]
+
 # Date patterns to remove
 DATE_PATTERNS = [
     r'\d{1,2} апр,', r'\d{1,2} мая,', r'\d{1,2} июн,', r'\d{1,2} июл,',
@@ -155,8 +163,17 @@ def is_sports_event(title, genre=""):
     return is_football or is_mma
 
 def should_ignore_event(title):
-    """Check if event should be ignored based on stop words"""
-    lower_title = title.lower()
+    """Check if event should be ignored based on stop words or patterns"""
+    lower_title = title.lower().strip()
+    
+    # Игнорируем названия каналов
+    for channel in CHANNEL_NAMES_TO_IGNORE:
+        if lower_title == channel or lower_title.startswith(channel + ' '):
+            return True
+    
+    # Игнорируем слишком короткие названия (менее 10 символов) — скорее всего, это канал
+    if len(lower_title) < 10 and not any(kw in lower_title for kw in ['vs', 'против', '-', '–', '—']):
+        return True
     
     # Check for stop words
     for stop_word in STOP_WORDS:
