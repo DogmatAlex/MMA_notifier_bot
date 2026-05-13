@@ -374,6 +374,57 @@ async def parse_matchtv_source(date_str=None):
                     # Clean the title
                     title = clean_event_title(title)
                     
+                    # === НОВОЕ: Проверяем, что событие относится к запрошенной дате ===
+                    # Если date_str передана, фильтруем события по дате
+                    if date_str:
+                        # Ищем дату в тексте элемента или его родителя
+                        # Форматы дат на сайте: "16 мая", "16.05", "16.05.2026"
+                        date_found = False
+                        event_date = None
+                        
+                        # Проверяем текст самого элемента
+                        elem_text = element.get_text(strip=True)
+                        
+                        # Проверяем текст родителя (часто дата находится рядом)
+                        parent_text = element.parent.get_text(strip=True) if element.parent else ""
+                        
+                        # Объединяем текст для поиска
+                        combined_text = f"{elem_text} {parent_text}".lower()
+                        
+                        # Парсим дату из текста (поддерживаем форматы: "16 мая", "16.05", "16.05.2026")
+                        date_patterns = [
+                            r'(\d{1,2})\s+мая',  # "16 мая"
+                            r'(\d{1,2})\.05',     # "16.05"
+                            r'(\d{1,2})\.05\.(\d{4})',  # "16.05.2026"
+                        ]
+                        
+                        for pattern in date_patterns:
+                            match = re.search(pattern, combined_text)
+                            if match:
+                                if len(match.groups()) == 2:
+                                    # Формат "16.05.2026"
+                                    day, year = match.groups()
+                                    event_month = 5  # май
+                                else:
+                                    # Формат "16 мая" или "16.05"
+                                    day = match.group(1)
+                                    event_month = 5  # предполагаем май для упрощения
+                                    year = get_current_time().year
+                                
+                                # Создаем дату события
+                                try:
+                                    event_date = datetime(int(year), event_month, int(day)).strftime("%Y-%m-%d")
+                                    date_found = True
+                                    break
+                                except ValueError:
+                                    pass  # Если не удалось распарсить, не фильтруем
+                        
+                        # Если дату нашли в тексте, но она не совпадает с запрошенной — пропускаем
+                        if date_found and event_date and event_date != date_str:
+                            logger.debug(f"Skipping event on {event_date} (requested: {date_str}): {title[:50]}")
+                            continue  # Пропускаем событие не на запрошенную дату
+                    # === КОНЕЦ НОВОГО ===
+                    
                     # Check for sports content
                     if is_sports_event(title):
                         # Check if event is in the future
