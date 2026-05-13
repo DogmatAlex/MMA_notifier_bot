@@ -45,8 +45,9 @@ TRASH_KEYWORDS = [
 CHANNEL_NAMES_TO_IGNORE = [
     'футбол 1', 'футбол 2', 'футбол 3',
     'матч! футбол 1', 'матч! футбол 2', 'матч! футбол 3',
-    'боец', 'арена', 'игра', 'страна',
-    'матч! арена', 'матч! игра', 'матч! страна',
+    'боец', 'арена', 'игра', 'страна', 'премьер',
+    'матч! боец', 'матч! арена', 'матч! игра', 'матч! страна',
+    'матч! премьер', 'матч тв', 'matchtv',
 ]
 
 # Date patterns to remove
@@ -166,19 +167,63 @@ def should_ignore_event(title):
     """Check if event should be ignored based on stop words or patterns"""
     lower_title = title.lower().strip()
     
-    # Игнорируем названия каналов
+    # === ИСПРАВЛЕНИЕ: Надёжная фильтрация названий каналов ===
     for channel in CHANNEL_NAMES_TO_IGNORE:
-        if lower_title == channel or lower_title.startswith(channel + ' '):
+        # Экранируем спецсимволы для regex (например, "!" в "матч!")
+        escaped_channel = re.escape(channel)
+        
+        # Проверяем, содержится ли канал как отдельное слово или фраза:
+        # - в начале строки: "футбол 1..." или "матч! футбол 1..."
+        # - в конце строки: "...футбол 1"
+        # - в середине: "...футбол 1..."
+        # \b — граница слова, но для фраз используем более гибкий паттерн
+        pattern = rf'(?:^|\s|!|\.|,)\s*{escaped_channel}\s*(?:\s|$|\.|,|!)'
+        if re.search(pattern, lower_title):
+            # logger.debug(f"Ignoring channel name: '{title}' (matched pattern: {channel})")
             return True
+    # === КОНЕЦ ИСПРАВЛЕНИЯ ===
     
     # Игнорируем слишком короткие названия (менее 10 символов) — скорее всего, это канал
-    if len(lower_title) < 10 and not any(kw in lower_title for kw in ['vs', 'против', '-', '–', '—']):
+    if len(lower_title) < 10 and not any(kw in lower_title for kw in ['vs', 'против', '-', '–', '—', ':']):
         return True
     
     # Check for stop words
     for stop_word in STOP_WORDS:
         if stop_word in lower_title:
             return True
+    
+    # === НОВОЕ: Фильтр "пустых" турнирных заголовков ===
+    # Если заголовок содержит "футбол" или "матч", но:
+    # 1. Не содержит признаков РЕАЛЬНОГО матча (команд, "прямая", "трансляция")
+    # 2. Содержит признаки расписания/категории ("тур", "все матчи", "суперлига" и т.п.)
+    # → это заголовок категории, а не конкретный матч → фильтруем
+    if any(kw in lower_title for kw in ['футбол', 'матч']):
+        # Признаки наличия конкретных команд/бойцов
+        has_teams = any(kw in lower_title for kw in [
+            ' - ', '– ', '— ',  # разделители команд
+            ' vs ', 'против',   # форматы "против"
+            ': ',               # двоеточие перед описанием
+        ]) or re.search(r'\d+-\d+', lower_title)  # счёт в тексте
+        
+        # Признаки прямой трансляции (даже без команд — это событие)
+        has_broadcast = any(kw in lower_title for kw in [
+            'прямая', 'трансляция', 'live', 'эфир', 'показ', 'онлайн'
+        ])
+        
+        # Признаки "пустого" турнира/категории
+        is_vague_tournament = any(kw in lower_title for kw in [
+            'тур ', 'финал', 'все матчи', 'суперлига', 'женщины', 'мужчины',
+            'чемпионат мира', 'лига наций', 'обзор тура', 'итоги тура',
+            'расписание', 'календарь', 'все трансляции'
+        ])
+        
+        # Фильтруем, если это "пустой" турнир без признаков реального матча
+        if is_vague_tournament and not has_teams and not has_broadcast:
+            # logger.debug(f"Ignoring vague tournament title: '{title}'")
+            return True
+    # === КОНЕЦ НОВОГО ===
+    
+    # logger.debug(f"should_ignore_event('{title[:60]}...') → False")
     return False
 
 def determine_sport_type(title, genre=""):
@@ -444,6 +489,34 @@ async def parse_matchtv_source(date_str=None):
                 except Exception as e:
                     logger.warning(f"Error processing alternative element: {e}")
                     continue
+                            
+        # === ПОСТ-ФИЛЬТР ДЛЯ АЛЬТЕРНАТИВНОГО МЕТОДА ===
+        # Если сработал альтернативный метод (не нашли JSON), применим жёсткую фильтрацию
+        if not schedule_data and broadcasts:
+            filtered = []
+            for b in broadcasts:
+                title = b['event'].lower()
+                
+                # Оставляем только если есть явные признаки РЕАЛЬНОГО матча:
+                # 1. Есть разделитель команд (-, vs, против)
+                # 2. ИЛИ есть "прямая трансляция" / "трансляция"
+                # 3. И нет признаков "пустого" турнира/категории
+                has_teams = any(kw in title for kw in [' - ', '– ', '— ', ' vs ', 'против', ':'])
+                has_broadcast = any(kw in title for kw in ['прямая', 'трансляция', 'live', 'эфир'])
+                is_vague = any(kw in title for kw in [
+                    'тур ', 'все матчи', 'суперлига', 'чемпионат мира',
+                    'обзор', 'итоги', 'женщины', 'мужчины', 'лига наций'
+                ])
+                
+                # Фильтруем: оставляем только реальные матчи
+                if (has_teams or has_broadcast) and not is_vague:
+                    filtered.append(b)
+                else:
+                    logger.debug(f"Post-filter removed vague event: '{b['event'][:60]}...'")
+            
+            broadcasts = filtered
+            logger.info(f"After post-filter: {len(broadcasts)} broadcasts remain (was {len(broadcasts) + len([b for b in broadcasts if b not in filtered])})")
+        # === КОНЕЦ ПОСТ-ФИЛЬТРА ===
                             
         # Sort by time
         broadcasts.sort(key=lambda x: x['time'])
