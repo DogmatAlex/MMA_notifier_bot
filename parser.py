@@ -245,7 +245,7 @@ def determine_sport_type(title, genre=""):
         return "Unknown"
 
 async def parse_matchtv_source(date_str=None):
-    """Parse sports broadcasts from matchtv.ru"""
+    """Parse sports broadcasts from matchtv.ru through direct HTML card parsing"""
     logger.info(f"Attempting to fetch data from matchtv.ru for date {date_str or 'today'}")
     
     # Import cache functions
@@ -277,11 +277,12 @@ async def parse_matchtv_source(date_str=None):
             'Upgrade-Insecure-Requests': '1',
         }
         
-        # Try to get the schedule page
+        # Try to get the live broadcasts page
         if date_str:
-            url = f"https://matchtv.ru/tvguide?date={date_str}"
+            # Try adding date parameter, if site supports it
+            url = f"https://matchtv.ru/video/live?date={date_str}"
         else:
-            url = "https://matchtv.ru/tvguide"
+            url = "https://matchtv.ru/video/live"
             
         response = scraper.get(url, headers=headers, timeout=15)
         
@@ -297,227 +298,116 @@ async def parse_matchtv_source(date_str=None):
         # Get current time for filtering
         current_time = get_current_time()
         
-        # Try to find JSON data in script tags
-        scripts = soup.find_all('script')
-        schedule_data = []
+        # Find all broadcast cards by stable class
+        cards = soup.find_all('div', class_='m-media-card-wrapper')
+        logger.info(f"Found {len(cards)} broadcast cards on matchtv.ru")
         
-        # Look for schedule data in script tags
-        for i, script in enumerate(scripts):
-            if script.string:
-                script_content = script.string
-                # Extract the JSON data using a pattern
-                schedule_pattern = re.compile(r'"schedule":(\[\{.*?\}\])')
-                schedule_matches = schedule_pattern.findall(script_content)
+        # === НОВОЕ: Строгая проверка вида спорта ===
+        def is_allowed_sport(title: str, subtitle: str) -> bool:
+            """Разрешаем только футбол и ММА/бокс/единоборства"""
+            lower_title = title.lower()
+            lower_subtitle = subtitle.lower()
+            combined = f"{lower_title} {lower_subtitle}"
+            
+            # Явно запрещённые виды (даже если содержат "футбол" или "чемпионат")
+            blocked = [
+                'тхэквондо', 'регби', 'прыжки в воду', 'волейбол', 'баскетбол',
+                'хоккей', 'теннис', 'биатлон', 'лыжи', 'плавание', 'гандбол',
+                'водное поло', 'настольный теннис', 'бадминтон', 'фигурное катание',
+                'керлинг', 'сноуборд', 'фристайл', 'шорт-трек'
+            ]
+            if any(kw in combined for kw in blocked):
+                return False
+            
+            # Разрешённые виды
+            football_ok = any(kw in combined for kw in ['футбол', 'фнл', 'рпл', 'ла лига', 'апл', 'серия а', 'бундеслига', 'лига чемпионов', 'лига европы'])
+            mma_ok = any(kw in combined for kw in ['mma', 'ufc', 'аса', 'bellator', 'бокс', 'единоборства', 'смешанные единоборства', 'one fc', 'ural fc', 'aca'])
+            
+            return football_ok or mma_ok
+        # === КОНЕЦ НОВОГО ===
+        
+        # === НОВОЕ: Извлечение даты из бейджа ===
+        def parse_date_from_badge(badge_text: str, current_date) -> str:
+            """Преобразует 'Сегодня, 19:55' или 'Завтра, 20:30' в YYYY-MM-DD"""
+            if 'сегодня' in badge_text.lower():
+                return current_date.strftime("%Y-%m-%d")
+            elif 'завтра' in badge_text.lower():
+                return (current_date + timedelta(days=1)).strftime("%Y-%m-%d")
+            else:
+                # Фоллбэк: пытаемся распарсить дату из текста (если сайт отдаёт "14 мая, 19:55")
+                date_match = re.search(r'(\d{1,2})\s+(?:янв|фев|мар|апр|мая|июн|июл|авг|сен|окт|ноя|дек)[а-я]*', badge_text.lower())
+                if date_match:
+                    try:
+                        # Упрощённый парсинг: предполагаем текущий год
+                        from datetime import datetime
+                        month_map = {'янв':1,'фев':2,'мар':3,'апр':4,'мая':5,'июн':6,'июл':7,'авг':8,'сен':9,'окт':10,'ноя':11,'дек':12}
+                        day = int(date_match.group(1))
+                        month_str = date_match.group(0).split()[1][:3]
+                        month = month_map.get(month_str, current_date.month)
+                        return datetime(current_date.year, month, day).strftime("%Y-%m-%d")
+                    except:
+                        pass
+                # Если не получилось — используем дату из аргумента
+                return current_date.strftime("%Y-%m-%d") if current_date else None
+        # === КОНЕЦ НОВОГО ===
+        
+        # Process each card
+        for card in cards:
+            try:
+                # 1. Extract time from date badge
+                badge = card.find('div', class_='m-media-card-date-badge')
+                badge_text = badge.get_text(strip=True) if badge else ""
+                time_str = "N/A"
+                if badge:
+                    # Extract time from text
+                    time_match = re.search(r'(\d{1,2}:\d{2})', badge_text)
+                    if time_match:
+                        time_str = time_match.group(1)
                 
-                if schedule_matches:
-                    logger.info(f"Found schedule data in script {i}")
-                    for j, schedule_json in enumerate(schedule_matches):
-                        try:
-                            # Try to parse the schedule JSON
-                            schedule_items = json.loads(schedule_json)
-                            logger.info(f"Schedule {j+1} in script {i} has {len(schedule_items)} items")
-                            
-                            # Add items to our schedule data
-                            for item in schedule_items:
-                                schedule_data.append(item)
-                        except json.JSONDecodeError as e:
-                            logger.warning(f"JSON decode error for schedule {j+1} in script {i}: {e}")
-                            # Try to fix common issues
-                            fixed_json = schedule_json.replace('\\"', '"')
-                            try:
-                                schedule_items = json.loads(fixed_json)
-                                logger.info(f"Fixed JSON for schedule {j+1} in script {i}, has {len(schedule_items)} items")
-                                for item in schedule_items:
-                                    schedule_data.append(item)
-                            except json.JSONDecodeError:
-                                logger.warning(f"Still couldn't parse schedule {j+1} in script {i}")
-                    break  # Found schedule data, no need to check other scripts
-        
-        logger.info(f"Total schedule items found: {len(schedule_data)}")
-        
-        # Process schedule data if found
-        for item in schedule_data:
-            time_str = item.get('time', 'N/A')
-            title = item.get('title', '')
-            genre = item.get('genre', '')
-            
-            # Fix escaped quotes
-            title = title.replace('\\"', '"')
-            
-            # Clean the title
-            title = clean_event_title(title)
-            
-            # Skip if title is empty or too short
-            if not title or len(title) < 3:
-                continue
-            
-            # Check for sports content
-            if is_sports_event(title, genre):
-                # Check if event is in the future
-                if is_future_event(time_str, date_str, current_time):
-                    # Determine sport type
-                    sport_type = determine_sport_type(title, genre)
-                    
-                    broadcast = {
-                        "time": time_str,
-                        "sport": sport_type,
-                        "event": title,
-                        "link": "https://matchtv.ru/video/live",
-                        "source": "matchtv.ru"
-                    }
-                    broadcasts.append(broadcast)
-                    logger.info(f"Found broadcast: {time_str} - {sport_type} - {title[:50]}...")
-        
-        # If we didn't find any broadcasts from JSON, try alternative parsing method
-        if not broadcasts:
-            logger.info("Trying alternative parsing method for matchtv.ru")
-            # Look for all elements that might contain broadcast information
-            all_elements = soup.find_all(['div', 'a', 'span', 'p', 'li', 'td', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-            # Filter elements that contain sports keywords
-            all_elements = [elem for elem in all_elements if elem.get_text() and
-                           (re.search(r'Футбол|ММА|UFC|Бокс', elem.get_text(), re.I))]
-            logger.info(f"Found {len(all_elements)} potential broadcast elements")
-            
-            # Process each element
-            for element in all_elements:
-                try:
-                    # Get the element itself and its parent to get more context
-                    parent = element.parent
-                    # Look for time information in the element or nearby elements
-                    time_elements = element.find_all(string=re.compile(r'\d{1,2}:\d{2}', re.I))
-                    if not time_elements:
-                        time_elements = parent.find_all(string=re.compile(r'\d{1,2}:\d{2}', re.I))
-                    if not time_elements:
-                        # Look for time elements in siblings
-                        time_elements = parent.find_all_previous(string=re.compile(r'\d{1,2}:\d{2}', re.I))
-                    
-                    time_str = "N/A"
-                    if time_elements:
-                        # Get the first time match
-                        time_match = re.search(r'(\d{1,2}:\d{2})', str(time_elements[0]))
-                        if time_match:
-                            time_str = time_match.group(1)
+                # 2. Extract title (teams/fighters)
+                title_elem = card.find('div', class_='m-media-card__title')
+                title = title_elem.get_text(strip=True) if title_elem else ""
                 
-                    # Skip if time is not available
-                    if time_str == "N/A":
-                        continue
+                # 3. Extract subtitle (tournament)
+                subtitle_elem = card.find('div', class_='m-media-card-subtitle')
+                subtitle = subtitle_elem.get_text(strip=True) if subtitle_elem else ""
                 
-                    # Get the text content of the element and its siblings
-                    full_text = ' '.join([t.strip() for t in element.find_all(string=True) if t.strip()])
-                    if not full_text:
-                        full_text = ' '.join([t.strip() for t in parent.find_all(string=True) if t.strip()])
-                    
-                    # Validate title - only process elements with text length under 200 characters
-                    title = full_text.strip()
-                    if not title or len(title) < 5 or len(title) > 200:
-                        continue
-                    
-                    # Skip obvious JavaScript/code
-                    if re.search(r'\b(self\.|window\.|function\s|[\[\]{}])\b', title, re.I):
-                        continue
-                    
-                    # Clean the title
-                    title = clean_event_title(title)
-                    
-                    # === НОВОЕ: Проверяем, что событие относится к запрошенной дате ===
-                    # Если date_str передана, фильтруем события по дате
-                    if date_str:
-                        # Ищем дату в тексте элемента или его родителя
-                        # Форматы дат на сайте: "16 мая", "16.05", "16.05.2026"
-                        date_found = False
-                        event_date = None
-                        
-                        # Проверяем текст самого элемента
-                        elem_text = element.get_text(strip=True)
-                        
-                        # Проверяем текст родителя (часто дата находится рядом)
-                        parent_text = element.parent.get_text(strip=True) if element.parent else ""
-                        
-                        # Объединяем текст для поиска
-                        combined_text = f"{elem_text} {parent_text}".lower()
-                        
-                        # Парсим дату из текста (поддерживаем форматы: "16 мая", "16.05", "16.05.2026")
-                        date_patterns = [
-                            r'(\d{1,2})\s+мая',  # "16 мая"
-                            r'(\d{1,2})\.05',     # "16.05"
-                            r'(\d{1,2})\.05\.(\d{4})',  # "16.05.2026"
-                        ]
-                        
-                        for pattern in date_patterns:
-                            match = re.search(pattern, combined_text)
-                            if match:
-                                if len(match.groups()) == 2:
-                                    # Формат "16.05.2026"
-                                    day, year = match.groups()
-                                    event_month = 5  # май
-                                else:
-                                    # Формат "16 мая" или "16.05"
-                                    day = match.group(1)
-                                    event_month = 5  # предполагаем май для упрощения
-                                    year = get_current_time().year
-                                
-                                # Создаем дату события
-                                try:
-                                    event_date = datetime(int(year), event_month, int(day)).strftime("%Y-%m-%d")
-                                    date_found = True
-                                    break
-                                except ValueError:
-                                    pass  # Если не удалось распарсить, не фильтруем
-                        
-                        # Если дату нашли в тексте, но она не совпадает с запрошенной — пропускаем
-                        if date_found and event_date and event_date != date_str:
-                            logger.debug(f"Skipping event on {event_date} (requested: {date_str}): {title[:50]}")
-                            continue  # Пропускаем событие не на запрошенную дату
-                    # === КОНЕЦ НОВОГО ===
-                    
-                    # Check for sports content
-                    if is_sports_event(title):
-                        # Check if event is in the future
-                        if is_future_event(time_str, date_str, current_time):
-                            # Determine sport type
-                            sport_type = determine_sport_type(title)
-                            
-                            broadcast = {
-                                "time": time_str,
-                                "sport": sport_type,
-                                "event": title,
-                                "link": "https://matchtv.ru/video/live",
-                                "source": "matchtv.ru"
-                            }
-                            broadcasts.append(broadcast)
-                            logger.info(f"Found broadcast with alternative method: {time_str} - {sport_type} - {title[:50]}...")
-                except Exception as e:
-                    logger.warning(f"Error processing alternative element: {e}")
+                # 4. Combine into full event title
+                full_title = f"{title} {subtitle}".strip() if subtitle else title
+                
+                # 5. Skip empty titles
+                if not full_title or len(full_title) < 5:
                     continue
-                            
-        # === ПОСТ-ФИЛЬТР ДЛЯ АЛЬТЕРНАТИВНОГО МЕТОДА ===
-        # Если сработал альтернативный метод (не нашли JSON), применим жёсткую фильтрацию
-        if not schedule_data and broadcasts:
-            filtered = []
-            for b in broadcasts:
-                title = b['event'].lower()
                 
-                # Оставляем только если есть явные признаки РЕАЛЬНОГО матча:
-                # 1. Есть разделитель команд (-, vs, против)
-                # 2. ИЛИ есть "прямая трансляция" / "трансляция"
-                # 3. И нет признаков "пустого" турнира/категории
-                has_teams = any(kw in title for kw in [' - ', '– ', '— ', ' vs ', 'против', ':'])
-                has_broadcast = any(kw in title for kw in ['прямая', 'трансляция', 'live', 'эфир'])
-                is_vague = any(kw in title for kw in [
-                    'тур ', 'все матчи', 'суперлига', 'чемпионат мира',
-                    'обзор', 'итоги', 'женщины', 'мужчины', 'лига наций'
-                ])
+                # 6. Check if it's an allowed sport (football or MMA only)
+                if not is_allowed_sport(title, subtitle):
+                    continue
                 
-                # Фильтруем: оставляем только реальные матчи
-                if (has_teams or has_broadcast) and not is_vague:
-                    filtered.append(b)
-                else:
-                    logger.debug(f"Post-filter removed vague event: '{b['event'][:60]}...'")
-            
-            broadcasts = filtered
-            logger.info(f"After post-filter: {len(broadcasts)} broadcasts remain (was {len(broadcasts) + len([b for b in broadcasts if b not in filtered])})")
-        # === КОНЕЦ ПОСТ-ФИЛЬТРА ===
-                            
+                # 7. Extract date from badge
+                event_date = parse_date_from_badge(badge_text, current_time.date())
+                
+                # 8. Check if event is in the future (within 48 hours)
+                if not is_future_event(time_str, event_date, current_time):
+                    continue
+                
+                # 9. Determine sport type
+                sport_type = determine_sport_type(full_title, subtitle)
+                
+                # 10. Create broadcast object
+                broadcast = {
+                    "time": time_str,
+                    "sport": sport_type,
+                    "event": clean_event_title(full_title),
+                    "link": "https://matchtv.ru/video/live",
+                    "source": "matchtv.ru"
+                }
+                broadcasts.append(broadcast)
+                logger.info(f"Found broadcast: {time_str} - {sport_type} - {full_title[:50]}...")
+                
+            except Exception as e:
+                logger.warning(f"Error processing card: {e}")
+                continue
+        
         # Sort by time
         broadcasts.sort(key=lambda x: x['time'])
         
