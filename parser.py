@@ -231,15 +231,37 @@ def determine_sport_type(title, genre=""):
     lower_title = title.lower()
     lower_genre = genre.lower() if genre else ""
     
-    # Check for football keywords
-    is_football = any(keyword in lower_title or keyword in lower_genre for keyword in FOOTBALL_KEYWORDS)
+    # Strict football keywords (only specific terms, no generic words like "кубок")
+    STRICT_FOOTBALL_KEYWORDS = [
+        'футбол', 'фнл', 'рпл', 'ла лига', 'апл', 'серия а', 'бундеслига',
+        'лига чемпионов', 'лига европы'
+    ]
     
-    # Check for MMA keywords
-    is_mma = any(keyword in lower_title or keyword in lower_genre for keyword in MMA_KEYWORDS)
+    # Strict MMA keywords
+    STRICT_MMA_KEYWORDS = [
+        'бокс', 'mma', 'ufc', 'аса', 'bellator', 'единоборства',
+        'смешанные единоборства', 'fight night'
+    ]
     
-    if is_football:
+    # 1. Check genre first if it's provided
+    if lower_genre:
+        # Check for football keywords in genre
+        is_football_genre = any(keyword in lower_genre for keyword in STRICT_FOOTBALL_KEYWORDS)
+        if is_football_genre:
+            return "Football"
+        
+        # Check for MMA keywords in genre
+        is_mma_genre = any(keyword in lower_genre for keyword in STRICT_MMA_KEYWORDS)
+        if is_mma_genre:
+            return "MMA"
+    
+    # 2. If genre didn't determine the sport, check title with strict keywords only
+    is_football_title = any(keyword in lower_title for keyword in STRICT_FOOTBALL_KEYWORDS)
+    is_mma_title = any(keyword in lower_title for keyword in STRICT_MMA_KEYWORDS)
+    
+    if is_football_title:
         return "Football"
-    elif is_mma:
+    elif is_mma_title:
         return "MMA"
     else:
         return "Unknown"
