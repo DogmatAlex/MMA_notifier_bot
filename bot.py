@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize bot and dispatcher
-session = AiohttpSession(timeout=60, proxy="socks5://127.0.0.1:1080")
+session = AiohttpSession(timeout=60)
 bot = Bot(token=TELEGRAM_BOT, session=session)
 dp = Dispatcher()
 router = Router()
