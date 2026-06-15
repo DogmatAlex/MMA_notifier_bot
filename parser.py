@@ -1006,7 +1006,9 @@ def format_broadcast_message(broadcasts):
                     # Create datetime with the API date and event time
                     event_datetime = base_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
                     # For early morning events (00:00-05:59), consider them part of the next calendar day
-                    if 0 <= hour <= 5:
+                    # Добавляем день для ночных часов ТОЛЬКО если сайт показал "сегодня"
+                    # Если сайт уже показал "завтра" — значит, он сам учёл переход через полночь
+                    if 0 <= hour <= 5 and api_date_str == today_str:
                         event_datetime += timedelta(days=1)
                     # Get the actual calendar date as string
                     event_calendar_date = event_datetime.strftime("%Y-%m-%d")
