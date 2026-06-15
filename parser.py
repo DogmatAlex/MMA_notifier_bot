@@ -82,7 +82,6 @@ def is_future_event(event_time_str, event_date_str, current_time):
         return past_threshold <= event_time <= future_threshold
     except ValueError:
         # If we can't parse the time, consider it valid
-        logger.debug(f"Accepting event with unparsable time: {event_time_str}")
         return True
 
 def clean_event_title(text):
@@ -148,123 +147,54 @@ def extract_team_names(event_title):
 
 def is_sports_event(title, genre=""):
     """Check if the event is a sports event we're interested in"""
-    # First check if we should ignore this event
-    if should_ignore_event(title):
+    if not title:
         return False
     
+    # Convert to lowercase for case-insensitive matching
     lower_title = title.lower()
     lower_genre = genre.lower() if genre else ""
     
-    # Check for football keywords
-    is_football = any(keyword in lower_title or keyword in lower_genre for keyword in FOOTBALL_KEYWORDS)
+    # Combine title and genre for matching
+    combined = f"{lower_title} {lower_genre}"
+    
+    # Check for stop words that indicate non-sports events
+    if any(stop_word in combined for stop_word in STOP_WORDS):
+        return False
     
     # Check for MMA keywords
-    is_mma = any(keyword in lower_title or keyword in lower_genre for keyword in MMA_KEYWORDS)
-    
-    return is_football or is_mma
-
-def should_ignore_event(title):
-    """Check if event should be ignored based on stop words or patterns"""
-    lower_title = title.lower().strip()
-    
-    # === ИСПРАВЛЕНИЕ: Надёжная фильтрация названий каналов ===
-    for channel in CHANNEL_NAMES_TO_IGNORE:
-        # Экранируем спецсимволы для regex (например, "!" в "матч!")
-        escaped_channel = re.escape(channel)
-        
-        # Проверяем, содержится ли канал как отдельное слово или фраза:
-        # - в начале строки: "футбол 1..." или "матч! футбол 1..."
-        # - в конце строки: "...футбол 1"
-        # - в середине: "...футбол 1..."
-        # \b — граница слова, но для фраз используем более гибкий паттерн
-        pattern = rf'(?:^|\s|!|\.|,)\s*{escaped_channel}\s*(?:\s|$|\.|,|!)'
-        if re.search(pattern, lower_title):
-            # logger.debug(f"Ignoring channel name: '{title}' (matched pattern: {channel})")
-            return True
-    # === КОНЕЦ ИСПРАВЛЕНИЯ ===
-    
-    # Игнорируем слишком короткие названия (менее 10 символов) — скорее всего, это канал
-    if len(lower_title) < 10 and not any(kw in lower_title for kw in ['vs', 'против', '-', '–', '—', ':']):
+    if any(mma_keyword in combined for mma_keyword in MMA_KEYWORDS):
         return True
     
-    # Check for stop words
-    for stop_word in STOP_WORDS:
-        if stop_word in lower_title:
-            return True
+    # Check for football keywords
+    if any(football_keyword in combined for football_keyword in FOOTBALL_KEYWORDS):
+        return True
     
-    # === НОВОЕ: Фильтр "пустых" турнирных заголовков ===
-    # Если заголовок содержит "футбол" или "матч", но:
-    # 1. Не содержит признаков РЕАЛЬНОГО матча (команд, "прямая", "трансляция")
-    # 2. Содержит признаки расписания/категории ("тур", "все матчи", "суперлига" и т.п.)
-    # → это заголовок категории, а не конкретный матч → фильтруем
-    if any(kw in lower_title for kw in ['футбол', 'матч']):
-        # Признаки наличия конкретных команд/бойцов
-        has_teams = any(kw in lower_title for kw in [
-            ' - ', '– ', '— ',  # разделители команд
-            ' vs ', 'против',   # форматы "против"
-            ': ',               # двоеточие перед описанием
-        ]) or re.search(r'\d+-\d+', lower_title)  # счёт в тексте
-        
-        # Признаки прямой трансляции (даже без команд — это событие)
-        has_broadcast = any(kw in lower_title for kw in [
-            'прямая', 'трансляция', 'live', 'эфир', 'показ', 'онлайн'
-        ])
-        
-        # Признаки "пустого" турнира/категории
-        is_vague_tournament = any(kw in lower_title for kw in [
-            'тур ', 'финал', 'все матчи', 'суперлига', 'женщины', 'мужчины',
-            'чемпионат мира', 'лига наций', 'обзор тура', 'итоги тура',
-            'расписание', 'календарь', 'все трансляции'
-        ])
-        
-        # Фильтруем, если это "пустой" турнир без признаков реального матча
-        if is_vague_tournament and not has_teams and not has_broadcast:
-            # logger.debug(f"Ignoring vague tournament title: '{title}'")
-            return True
-    # === КОНЕЦ НОВОГО ===
-    
-    # logger.debug(f"should_ignore_event('{title[:60]}...') → False")
-    return False
+    # If no specific keywords found, check for generic sports terms
+    generic_sports = ['футбол', 'mma', 'ufc', 'аса', 'bellator', 'бой', 'единоборства']
+    return any(sport in combined for sport in generic_sports)
 
-def determine_sport_type(title, genre=""):
-    """Determine the sport type of an event"""
-    lower_title = title.lower()
-    lower_genre = genre.lower() if genre else ""
+def determine_sport_type(event_title, subtitle=""):
+    """Determine sport type based on event title and subtitle"""
+    combined_text = f"{event_title} {subtitle}".lower()
     
-    # Strict football keywords (only specific terms, no generic words like "кубок")
-    STRICT_FOOTBALL_KEYWORDS = [
-        'футбол', 'фнл', 'рпл', 'ла лига', 'апл', 'серия а', 'бундеслига',
-        'лига чемпионов', 'лига европы'
-    ]
-    
-    # Strict MMA keywords
-    STRICT_MMA_KEYWORDS = [
-        'бокс', 'mma', 'ufc', 'аса', 'bellator', 'единоборства',
-        'смешанные единоборства', 'fight night'
-    ]
-    
-    # 1. Check genre first if it's provided
-    if lower_genre:
-        # Check for football keywords in genre
-        is_football_genre = any(keyword in lower_genre for keyword in STRICT_FOOTBALL_KEYWORDS)
-        if is_football_genre:
-            return "Football"
-        
-        # Check for MMA keywords in genre
-        is_mma_genre = any(keyword in lower_genre for keyword in STRICT_MMA_KEYWORDS)
-        if is_mma_genre:
+    # Check for MMA keywords first (higher priority)
+    mma_keywords = ['mma', 'ufc', 'аса', 'bellator', 'бокс', 'единоборства', 'смешанные единоборства']
+    if any(keyword in combined_text for keyword in mma_keywords):
+        # Special case: if it's boxing but also mentions "кубок победы" - treat as MMA
+        if 'бокс' in combined_text and ('кубок победы' in combined_text or 'кубок' in combined_text and 'победы' in combined_text):
+            return "MMA"
+        elif 'бокс' in combined_text:
+            return "MMA"  # Treat boxing as MMA in our context
+        else:
             return "MMA"
     
-    # 2. If genre didn't determine the sport, check title with strict keywords only
-    is_football_title = any(keyword in lower_title for keyword in STRICT_FOOTBALL_KEYWORDS)
-    is_mma_title = any(keyword in lower_title for keyword in STRICT_MMA_KEYWORDS)
-    
-    if is_football_title:
+    # Check for football keywords
+    football_keywords = ['футбол', 'рпл', 'апл', 'серия а', 'ла лига', 'бундеслига', 'лига чемпионов', 'лига европы']
+    if any(keyword in combined_text for keyword in football_keywords):
         return "Football"
-    elif is_mma_title:
-        return "MMA"
-    else:
-        return "Unknown"
+    
+    # Default to Football if no specific sport detected
+    return "Football"
 
 async def parse_matchtv_source(date_str=None):
     """Parse sports broadcasts from matchtv.ru through direct HTML card parsing"""
@@ -314,6 +244,21 @@ async def parse_matchtv_source(date_str=None):
         
         # Parse the HTML content
         soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Check if the date parameter is working
+        if date_str and response.status_code == 200:
+            # Look for date indicators in the response
+            date_indicators = soup.find_all(string=re.compile(date_str.replace('-', '.')))
+            if not date_indicators:
+                logger.warning(f"Date parameter may not be working. Requested {date_str} but no date indicators found in response.")
+                # Check if we're getting today's content instead of tomorrow's
+                today = get_current_time().strftime("%Y-%m-%d")
+                today_indicators = soup.find_all(string=re.compile(today.replace('-', '.')))
+                if today_indicators:
+                    logger.warning("It appears we're getting today's content instead of the requested date.")
+                
+                # Since the date parameter doesn't work, we need to fetch all broadcasts
+                # and then filter them based on the parsed date from the badge
         
         broadcasts = []
         
@@ -421,10 +366,11 @@ async def parse_matchtv_source(date_str=None):
                     "sport": sport_type,
                     "event": clean_event_title(full_title),
                     "link": "https://matchtv.ru/video/live",
-                    "source": "matchtv.ru"
+                    "source": "matchtv.ru",
+                    "date": event_date  # Add date for debugging
                 }
                 broadcasts.append(broadcast)
-                logger.info(f"Found broadcast: {time_str} - {sport_type} - {full_title[:50]}...")
+                logger.info(f"Found broadcast: {time_str} - {sport_type} - {full_title[:50]}... (date: {event_date})")
                 
             except Exception as e:
                 logger.warning(f"Error processing card: {e}")
@@ -432,6 +378,12 @@ async def parse_matchtv_source(date_str=None):
         
         # Sort by time
         broadcasts.sort(key=lambda x: x['time'])
+        
+        # If we requested a specific date, filter broadcasts to only include that date
+        # This is necessary because the date parameter in the URL doesn't actually work
+        if date_str:
+            original_count = len(broadcasts)
+            broadcasts = [b for b in broadcasts if b.get('date') == date_str]
         
         logger.info(f"Successfully parsed {len(broadcasts)} broadcasts from matchtv.ru")
         
@@ -484,11 +436,8 @@ async def parse_fight_source(date_str=None):
         
         # New URL for upcoming events
         url = "https://fight.ru/schedule/"
-        logger.info(f"Trying to fetch {url}")
         
         response = scraper.get(url, headers=headers, timeout=15)
-        
-        logger.info(f"fight.ru/schedule/ returned status code: {response.status_code}")
         
         if response.status_code != 200:
             logger.warning(f"Failed to fetch {url}, status code: {response.status_code}")
@@ -506,8 +455,6 @@ async def parse_fight_source(date_str=None):
         
         # Look for event items with correct CSS selectors only within the upcoming tab
         event_items = upcoming_tab.find_all('div', class_='fights-item position-relative')
-        
-        logger.info(f"Found {len(event_items)} event items on fight.ru/schedule/ (upcoming tab only)")
         
         # Get current date for filtering
         current_date = datetime.now().date()
@@ -552,13 +499,9 @@ async def parse_fight_source(date_str=None):
                         formatted_date = date_obj.strftime("%Y-%m-%d")
                         event_date = date_obj.date()
                         
-                        # Log the parsed date for debugging
-                        logger.info(f"Parsed event: date_str='{date_str}' → formatted='{formatted_date}' | title='{title[:50]}...'")
-                        
                         # Filter events: only include events within 0-90 days from today
                         max_date = current_date + timedelta(days=90)
                         if event_date < current_date or event_date > max_date:
-                            logger.info(f"Skipping event outside 0-90 day range: {formatted_date} | {title[:50]}...")
                             continue  # skip events outside the range
                     except ValueError:
                         logger.warning(f"Could not parse date: {date_str}")
@@ -642,7 +585,6 @@ async def parse_championat_ucl_source(date_str=None) -> list:
         else:
             url = "https://www.championat.com/stat/football/"
             
-        logger.info(f"Fetching data from {url}")
         response = scraper.get(url, headers=headers, timeout=10)
         
         if response.status_code != 200:
@@ -664,13 +606,10 @@ async def parse_championat_ucl_source(date_str=None) -> list:
             tournament_text = tournament_elem.get_text(strip=True)
             if "Лига чемпионов" in tournament_text or "лига чемпионов" in tournament_text:
                 tournament_stage = clean_event_title(tournament_text)
-                logger.info(f"Found tournament stage: {tournament_stage}")
         
         # Look for match links with UCL pattern
         # Find all links that contain /football/_ucl/ in href
         match_links = soup.find_all('a', href=re.compile(r'/football/_ucl/.*/match/\d+/'))
-        
-        logger.info(f"Found {len(match_links)} potential UCL matches")
         
         for link in match_links:
             try:
@@ -694,49 +633,34 @@ async def parse_championat_ucl_source(date_str=None) -> list:
                 # === ФИЛЬТР ЮНОШЕСКИХ/ЖЕНСКИХ ТУРНИРОВ (ПЕРЕД ОЧИСТКОЙ!) ===
                 exclude_keywords = ["u19", "u17", "u15", "юношеск", "молодёж", "женск", "women", "youth", "junior"]
                 if any(kw in title.lower() for kw in exclude_keywords):
-                    logger.info(f"Skipping youth/women match (raw): {title}")
                     continue
                 # === КОНЕЦ ФИЛЬТРА ===
                 
-                # Clean the title
-                title = clean_event_title(title)
+                # Clean title
+                clean_title = clean_event_title(title)
                 
-                # Apply extract_team_names for proper team name handling
-                home_team, away_team = extract_team_names(title)
-                if home_team and away_team:
-                    # First form the clean match name
-                    clean_match = f"{home_team} - {away_team}"
-                    # Then add tournament stage if found
-                    if tournament_stage:
-                        title = f"{tournament_stage}: {clean_match}"
-                    else:
-                        title = clean_match
-                
-                # Skip if title is empty or too short after cleaning
-                if not title or len(title) < 3:
+                # Skip if title is empty after cleaning
+                if not clean_title:
                     continue
                 
-                # Create full URL
-                match_url = "https://www.championat.com" + link['href'] if link.get('href', '').startswith('/') else link['href']
+                # Create broadcast object
+                broadcast = {
+                    "time": time_str,
+                    "sport": "Football",
+                    "event": clean_title,
+                    "link": f"https://www.championat.com{link['href']}" if link.get('href') else "https://www.championat.com/stat/football/",
+                    "source": "championat.com"
+                }
                 
-                # Check if event is in the future
-                if is_future_event(time_str, date_str, current_time):
-                    broadcast = {
-                        "time": time_str,
-                        "sport": "Football",
-                        "event": title,
-                        "link": match_url,
-                        "source": "championat.com"
-                    }
-                    broadcasts.append(broadcast)
-                    logger.info(f"Found UCL broadcast: {time_str} - Football - {title[:50]}...")
-                    
-                    # Limit to prevent too many matches
-                    if len(broadcasts) >= 20:
-                        break
-                        
+                # Add tournament stage to event name if available
+                if tournament_stage:
+                    broadcast["event"] = f"{tournament_stage}: {broadcast['event']}"
+                
+                broadcasts.append(broadcast)
+                logger.info(f"Found UCL broadcast: {time_str} - Football - {title[:50]}...")
+                
             except Exception as e:
-                logger.warning(f"Error processing championat.com match link: {e}")
+                logger.warning(f"Error parsing championat.com UCL match: {e}")
                 continue
         
         # Sort by time
@@ -749,9 +673,9 @@ async def parse_championat_ucl_source(date_str=None) -> list:
             save_to_cache("championat_ucl", date_str or "today", broadcasts)
         
         return broadcasts
-            
+        
     except Exception as e:
-        logger.error(f"Error parsing championat.com: {e}")
+        logger.error(f"Error parsing championat.com UCL: {e}")
         return []
 
 def deduplicate_broadcasts(broadcasts):
@@ -883,8 +807,6 @@ def deduplicate_broadcasts(broadcasts):
         
         for similar in similar_broadcasts[1:]:
             similar_score = _score_broadcast(similar)
-            # Добавить логирование для отладки
-            logger.debug(f"Comparing duplicates: '{best_broadcast['event']}' (score: {best_score}) vs '{similar['event']}' (score: {similar_score})")
             if similar_score > best_score:
                 best_broadcast = similar
                 best_score = similar_score
@@ -908,45 +830,28 @@ async def get_broadcasts_48h():
     
     logger.info(f"Fetching data for {today_str} and {tomorrow_str}")
     
-    # Define sources (matchtv.ru, fight.ru, and championat.com for /today command)
-    sources = [
-        ("matchtv.ru", parse_matchtv_source),
-        ("fight.ru", parse_fight_source),
-        ("championat.com", parse_championat_ucl_source),  # ← новая строка
+    # Fetch broadcasts from all sources for today and tomorrow
+    tasks = [
+        parse_matchtv_source(today_str),
+        parse_fight_source(today_str),
+        parse_championat_ucl_source(today_str),
+        parse_matchtv_source(tomorrow_str),
+        parse_fight_source(tomorrow_str),
+        parse_championat_ucl_source(tomorrow_str)
     ]
     
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Process results and handle exceptions
     all_broadcasts = []
+    source_names = ["matchtv.ru", "fight.ru", "championat.com", "matchtv.ru", "fight.ru", "championat.com"]
+    date_labels = ["today", "today", "today", "tomorrow", "tomorrow", "tomorrow"]
     
-    # Collect data from all sources for both today and tomorrow using asyncio.gather for speed
-    today_tasks = [source_function(today_str) for _, source_function in sources]
-    tomorrow_tasks = [source_function(tomorrow_str) for _, source_function in sources]
-    
-    # Execute all tasks concurrently
-    today_results = await asyncio.gather(*today_tasks, return_exceptions=True)
-    tomorrow_results = await asyncio.gather(*tomorrow_tasks, return_exceptions=True)
-    
-    # Process today's results
-    for i, result in enumerate(today_results):
-        source_name = sources[i][0]
+    for i, result in enumerate(results):
         if isinstance(result, Exception):
-            logger.error(f"Error with source {source_name} for today: {result}")
-        elif result is not None:
-            logger.info(f"Successfully got {len(result)} broadcasts from {source_name} for today")
-            # Add date information to each broadcast
-            for broadcast in result:
-                broadcast['date'] = today_str
-            all_broadcasts.extend(result)
-    
-    # Process tomorrow's results
-    for i, result in enumerate(tomorrow_results):
-        source_name = sources[i][0]
-        if isinstance(result, Exception):
-            logger.error(f"Error with source {source_name} for tomorrow: {result}")
-        elif result is not None:
-            logger.info(f"Successfully got {len(result)} broadcasts from {source_name} for tomorrow")
-            # Add date information to each broadcast
-            for broadcast in result:
-                broadcast['date'] = tomorrow_str
+            logger.error(f"Error fetching {source_names[i]} for {date_labels[i]}: {result}")
+        else:
+            logger.info(f"Successfully got {len(result)} broadcasts from {source_names[i]} for {date_labels[i]}")
             all_broadcasts.extend(result)
     
     # Remove duplicates
@@ -1012,10 +917,8 @@ def format_broadcast_message(broadcasts):
                         event_datetime += timedelta(days=1)
                     # Get the actual calendar date as string
                     event_calendar_date = event_datetime.strftime("%Y-%m-%d")
-                    logger.debug(f"Event '{broadcast['event'][:30]}...': API date={api_date_str}, time={event_time_str} → calendar date={event_calendar_date}")
             except (ValueError, TypeError) as e:
                 # If parsing fails, use the API date as fallback
-                logger.debug(f"Could not parse date/time for event '{broadcast['event']}': {e}")
                 event_calendar_date = api_date_str
             
             # Group by the calculated calendar date
@@ -1128,42 +1031,4 @@ def format_broadcast_message(broadcasts):
         logger.error(f"Error formatting broadcast message: {e}")
         # Return a simple message even if formatting fails
         return f"🖥 Найдено {len(broadcasts)} трансляций. Подробности смотрите на сайте."
-
-# Test function
-        # Use cloudscraper to avoid being blocked by the website
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'darwin',
-                'mobile': False
-            }
-        )
-# Test function
-async def test_parser():
-    """Test the parser"""
-    print("Testing parser...")
-    
-    try:
-        broadcasts = await get_broadcasts_48h()
-        
-        if broadcasts:
-            print(f"\nFound {len(broadcasts)} unique broadcasts:")
-            for i, broadcast in enumerate(broadcasts[:10]):  # Show first 10
-                source = broadcast.get('source', 'Unknown')
-                print(f"  {i+1}. {broadcast['time']} - {broadcast['sport']} - {broadcast['event'][:50]}... (from {source})")
-        else:
-            print("No broadcasts found")
-            
-        # Test formatting
-        message = format_broadcast_message(broadcasts)
-        print(f"\nFormatted message preview (first 1000 chars):\n{message[:1000]}...")
-        
-    except Exception as e:
-        print(f"Error testing parser: {e}")
-        import traceback
-        traceback.print_exc()
-
-if __name__ == "__main__":
-    # Run the test
-    asyncio.run(test_parser())
     
